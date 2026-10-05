@@ -3349,7 +3349,7 @@ function updateUi() {
 
         const preview = element('tns-prompt-preview');
         if (!preview.hidden) {
-            const prompt = armed ? buildInjection() : '';
+            const prompt = armed ? [buildInjection(), unifiedHost?.companionPrompt?.()].filter(Boolean).join('\n\n') : '';
             element('tns-prompt-text').textContent = prompt || '(지금은 주입할 내용이 없어요)';
             refreshPromptSize(prompt);
         }
@@ -3999,7 +3999,14 @@ function summary() {
     return { valid: snapshotMatchesMessage(message, snapshot), state: snapshot?.state ?? null,
         armed: isFullyArmed(), supervising: isSupervising(), diagnostics: diagnosticState() };
 }
-return { activateRuntime: () => { runtimeActive = true; }, onActivate, onEnable, onDisable, onClean, initialize, initializeUi, registerEvents,
+return {
+    allowSharedHints: () => getSettings().nextBeatHints && !slowBurnTargetProgress().active,
+    filterSharedHints: beats => {
+        const ignored = ignoredActSet();
+        const bans = [...(getChatMeta(false)?.customBans ?? []), ...(getSettings().globalBans ?? [])].map(String).filter(Boolean);
+        const recent = recentActs(Number(getSettings().repeatWindow) || DEFAULT_SETTINGS.repeatWindow).flatMap(row => row.acts);
+        return beats.filter(beat => !isActIgnored(beat, ignored) && !bans.some(ban => actMatchesPlainBan(beat, ban)) && !recent.some(act => actsAreSimilar(beat, act)));
+    }, activateRuntime: () => { runtimeActive = true; }, onActivate, onEnable, onDisable, onClean, initialize, initializeUi, registerEvents,
     observeLatestMessage, handleIncomingMessage, prepareSceneInjection, getSettings, getChatMeta,
     capturePassive, summary, diagnosticReport, clearDiagnostics, updateUi, setTab,
     syncStateTagDisplayGuard, stopStateTagDisplayGuard, runRefine, persistChat,

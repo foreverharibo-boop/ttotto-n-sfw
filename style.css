@@ -69,11 +69,12 @@
 #ttu-overlay .ttu-problems textarea { max-width: 100%; box-sizing: border-box; }
 #ttu-overlay [inert] { opacity: .55; }
 
-#ttu-overlay .ttu-shared-state { margin: 18px 0; padding-top: 14px; border-top: 1px solid var(--SmartThemeBorderColor, currentColor); min-width: 0; overflow-wrap: anywhere; }
-#ttu-overlay .ttu-shared-state h4 { margin: 0 0 6px; font-size: 1em; color: inherit; }
+#ttu-overlay .ttu-shared-state { margin: 8px 0 18px; min-width: 0; overflow-wrap: anywhere; }
 #ttu-overlay .ttu-state-note { margin: 0 0 12px; font-size: .9em; opacity: .75; }
-#ttu-overlay .ttu-state-group { display: flex; flex-direction: column; gap: 6px; margin: 0 0 14px; }
-#ttu-overlay .ttu-state-fields { margin: 0; }
-#ttu-overlay .ttu-state-fields dt { margin-top: 6px; font-weight: 600; }
-#ttu-overlay .ttu-state-fields dd { margin: 2px 0 8px 12px; }
-#ttu-overlay .ttu-shared-state ul { margin: 0; padding-inline-start: 22px; }
+#ttu-overlay .ttu-state-group { display: flex; flex-direction: column; gap: 8px; margin: 0 0 16px; min-width: 0; }
+#ttu-overlay .ttu-shared-state .tns-char-field { grid-template-columns: minmax(60px, 20%) minmax(0, 1fr); }
+#ttu-overlay .ttu-shared-state .text_pole { width: 100%; min-width: 0; box-sizing: border-box; }
+#ttu-overlay .ttu-shared-state input[readonly] { background: var(--SmartThemeBlurTintColor, transparent); color: var(--SmartThemeBodyColor, inherit); border: 1px solid var(--SmartThemeBorderColor, currentColor); border-radius: 8px; opacity: 1; }
+#ttu-overlay .ttu-record-chip { padding: 5px 8px; border-radius: 8px; background: color-mix(in srgb, currentColor 6%, transparent); }
+#ttu-body .ttu-intimate-idle #tns-panel-state > :not(:first-child):not(.tns-button-row):not(#tns-prompt-preview):not(#tns-slow-burn-card):not(#ttu-intimate-idle-note) { display: none !important; }
+#ttu-body .ttu-intimate-idle #tns-heat, #ttu-body .ttu-intimate-idle #tns-state-source { display: none !important; }

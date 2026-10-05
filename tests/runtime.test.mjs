@@ -186,7 +186,7 @@ test('intimate scenes share continuity rules and current facts, respecting each 
         assert.match(shared(), /question awaiting a response: When\?/);
         assert.match(shared(), /Newly established facts: Tomorrow/);
         assert.match(shared(), /USER message already answered or superseded it/);
-        assert.doesNotMatch(shared(), /Scene type:|SUGGESTED NEXT BEATS|USER-TARGET LOCK|STAGE CAP/);
+        assert.doesNotMatch(shared(), /PACING:|USER-TARGET LOCK|STAGE CAP/);
         settings.dialogueFlow = false;
         await r.runtime.intercept([], 1000, null, 'normal');
         assert.match(shared(), /SCENE TRANSITION GUARD/);
@@ -194,7 +194,7 @@ test('intimate scenes share continuity rules and current facts, respecting each 
         settings.dialogueFlow = true; settings.transitionGuard = false;
         await r.runtime.intercept([], 1000, null, 'normal');
         assert.match(shared(), /DIALOGUE CONTINUITY/);
-        assert.doesNotMatch(shared(), /SCENE TRANSITION GUARD|Time\/context:|Location:/);
+        assert.doesNotMatch(shared(), /SCENE TRANSITION GUARD/);
         settings.transitionGuard = true;
         r.context.chat[0].mes = 'Edited reply.';
         r.source.emit('MESSAGE_EDITED', 0);
@@ -234,5 +234,48 @@ test('home screen does not collect, arm, inject or announce; opening a real chat
         assert.equal(r.prompts[PROMPT_KEY], '');
         r.context.groupId = 'group'; r.context.chatId = 'group-chat';
         assert.equal(r.runtime.chatReady(), true);
+    } finally { r.runtime.stop(); }
+});
+
+
+test('intimate next-generation prompt contains all collected common data and native intimate data', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        const message = { mes: 'Latest reply.' + tags(), swipe_id: 0, swipes: ['Latest reply.' + tags(), 'Alternative.'] };
+        r.context.chat.push(message); r.source.emit('MESSAGE_RECEIVED', 0);
+        const shared = () => r.prompts[PROMPT_KEY].split('[Shared scene continuity]')[1]?.split('[Unified scene bookkeeping]')[0] || '';
+        const settings = r.runtime.settings().engines.sfw;
+        Object.assign(settings, { transitionGuard: true, dialogueFlow: true, repeatGuard: true, dialogueBeatGuard: true, nextBeatHints: true });
+        r.runtime.settings().engines.nsfw.nextBeatHints = true;
+        await r.runtime.intercept([], 1000, null, 'normal');
+        for (const text of ['Location: Room', 'Time/context: Morning', 'Environment: Rain', 'Important object "key": Desk', 'appearance: Coat', 'position/posture: Chair', 'holding/carrying: Cup', 'physical condition: Tired', 'Current conversation topic: Trip', 'question awaiting a response: When?', 'Newly established facts: Tomorrow', 'Scene type: conversation', 'Narrative intensity: 4/10', 'Narrative stage: 2/6', '- Talk', '- Question', '): Plan']) assert.ok(shared().includes(text), text);
+        assert.match(r.prompts[PROMPT_KEY], /physical contact: Hand/);
+        assert.match(r.prompts[PROMPT_KEY], /clothing: Coat/);
+        assert.match(r.prompts[PROMPT_KEY], /Listen/);
+        assert.equal(message.extra.ttottoUnifiedSfw.swipes['0'].state.stage, 2);
+        assert.equal(message.extra.ttottoUnifiedNsfw.swipes['0'].state.stage, 4);
+        assert.equal(message.extra.ttottoUnifiedNsfw.swipes['0'].state.heat, 8);
+        // Disabling scene-transition/dialogue rules must not discard object/body facts.
+        settings.transitionGuard = false; settings.dialogueFlow = false;
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.match(shared(), /Important object "key": Desk/); assert.match(shared(), /physical condition: Tired/);
+        assert.doesNotMatch(shared(), /SCENE TRANSITION GUARD|DIALOGUE CONTINUITY|Current conversation topic:/);
+        // Both engines' controls and bans apply to shared hints.
+        r.runtime.engines.nsfw.getChatMeta().customBans = ['Plan'];
+        await r.runtime.intercept([], 1000, null, 'normal'); assert.doesNotMatch(shared(), /SHARED NEXT POSSIBILITIES/);
+        r.runtime.engines.nsfw.getChatMeta().customBans = [];
+        settings.nextBeatHints = false; settings.repeatGuard = false; settings.dialogueBeatGuard = false;
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.doesNotMatch(shared(), /SHARED NEXT POSSIBILITIES|SHARED RECENT EVENTS|SHARED RECENT DIALOGUE/);
+        message.mes = 'Edited body.'; r.source.emit('MESSAGE_EDITED', 0);
+        await r.runtime.intercept([], 1000, null, 'normal'); assert.doesNotMatch(shared(), /Desk|Cup|Tired|Morning|Plan/);
+        message.swipe_id = 1; message.mes = 'Alternative.'; r.source.emit('MESSAGE_SWIPED', 0);
+        await r.runtime.intercept([], 1000, null, 'normal'); assert.doesNotMatch(shared(), /Desk|Cup|Tired/);
+        r.context.chat.push({ mes: 'Scene finished.' + tags(1) }); r.source.emit('MESSAGE_RECEIVED', 1);
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.equal(r.runtime.owner(), 'sfw'); assert.equal(shared(), '');
+        assert.match(r.prompts[PROMPT_KEY], /Important object "key": Desk/);
+        r.context.chatId = 'different-chat'; r.context.chat = []; r.context.chatMetadata = {}; r.source.emit('CHAT_CHANGED');
+        await r.runtime.intercept([], 1000, null, 'normal'); assert.doesNotMatch(r.prompts[PROMPT_KEY], /Desk|Cup|Tired/);
     } finally { r.runtime.stop(); }
 });

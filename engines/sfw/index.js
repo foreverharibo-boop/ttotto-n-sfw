@@ -2041,7 +2041,7 @@ function nextBeatReport({ forDisplay = false } = {}) {
 // 최신 답변의 후보만 필터링한다. 미검증 저장값은 화면에서만 확인한다.
 function nextBeatCandidates(options = {}) {
     const ignored = ignoredActSet();
-    const { state } = nextBeatReport(options);
+    const { state } = options.sharedState ? { state: options.sharedState } : nextBeatReport(options);
     if (!state?.next?.length) return [];
     const settings = getSettings();
     const bannedActs = recentActs(Number(settings.repeatWindow) || DEFAULT_SETTINGS.repeatWindow)
@@ -4315,25 +4315,29 @@ function onClean() {
 
 function buildUnifiedContinuityLines() {
     const settings = getSettings();
-    if (!settings.transitionGuard && !settings.dialogueFlow) return [];
     const message = assistantMessages().at(-1);
     const snapshot = snapshotForMessage(message);
     const state = snapshotMatchesMessage(message, snapshot) ? snapshot.state : null;
     const lines = ['[Shared scene continuity]'];
-    if (settings.transitionGuard) {
-        if (state) {
-            if (hasBi(state.location)) lines.push(`- Location: ${biText(state.location, 'en')}`);
-            if (hasBi(state.time)) lines.push(`- Time/context: ${biText(state.time, 'en')}`);
-            if (hasBi(state.environment)) lines.push(`- Environment: ${biText(state.environment, 'en')}`);
+    if (state) {
+        lines.push('CURRENT SHARED SCENE STATE (recorded facts):', ...buildStateLines(state));
+        if (state.intensity !== null && state.intensity !== undefined) lines.push(`- Narrative intensity: ${state.intensity}/10 (not sexual heat)`);
+        if (state.stage !== null && state.stage !== undefined) lines.push(`- Narrative stage: ${state.stage}/6 (descriptive only, not a sexual stage or pacing limit)`);
+        lines.push('Preserve important objects, appearance, physical condition, held items, posture, location, time and environment until explicit on-page actions or USER instructions change them.');
+        const acts = recentActs(Number(settings.repeatWindow) || DEFAULT_SETTINGS.repeatWindow);
+        if (acts.length) lines.push('SHARED RECENT EVENTS — avoid repeating these exact beats; do not avoid the active target scene:', ...acts.map(row => `- ${row.acts.map(act => biText(act, 'en')).join('; ')}`));
+        if (settings.dialogueBeatGuard) {
+            const dialogue = recentDialogueBeats();
+            if (dialogue.length) lines.push('SHARED RECENT DIALOGUE INTENTS — advance the conversation; direct answers and necessary clarifications are allowed:', ...dialogue.map(row => `- ${row.beats.map(beat => biText(beat, 'en')).join('; ')}`));
         }
-        lines.push('SCENE TRANSITION GUARD: Do not change location, jump forward in time, end the current interaction, or cut to another scene without an explicit on-page transition that follows from the USER message or the current action. A transition is allowed when it is narrated clearly; a silent teleport, unexplained time skip, or abrupt topic/scene replacement is not.');
+        if (settings.nextBeatHints && unifiedHost.allowSharedHints()) {
+            const beats = unifiedHost.filterSharedHints(nextBeatCandidates({ sharedState: state }));
+            if (beats.length) lines.push(`SHARED NEXT POSSIBILITIES (optional, not facts; follow the active intimate pacing and USER intent): ${beats.map(beat => biText(beat, 'en')).join(' / ')}`);
+        }
     }
-    if (settings.dialogueFlow) {
-        if (hasBi(state?.dialogueFlow?.topic)) lines.push(`- Current conversation topic: ${biText(state.dialogueFlow.topic, 'en')}`);
-        if (hasBi(state?.dialogueFlow?.lastQuestion)) lines.push(`- Most recent direct question awaiting a response: ${biText(state.dialogueFlow.lastQuestion, 'en')}`);
-        if (state?.dialogueFlow?.newFacts?.length) lines.push(`- Newly established facts: ${state.dialogueFlow.newFacts.map(fact => biText(fact, 'en')).join('; ')}`);
-        lines.push('DIALOGUE CONTINUITY: Stay with the current conversational topic unless the USER changes or resolves it. Address the most recent direct question naturally when it is still relevant, but treat it as resolved if the USER message already answered or superseded it. Treat newly established facts as grounding for what happens next: build forward from them naturally instead of merely restating them or making characters forget what was just learned.');
-    }
+    if (settings.transitionGuard) lines.push('SCENE TRANSITION GUARD: Do not change location, jump forward in time, end the current interaction, or cut to another scene without an explicit on-page transition that follows from the USER message or the current action. A transition is allowed when it is narrated clearly; a silent teleport, unexplained time skip, or abrupt topic/scene replacement is not.');
+    if (settings.dialogueFlow) lines.push('DIALOGUE CONTINUITY: Stay with the current conversational topic unless the USER changes or resolves it. Address the most recent direct question naturally when it is still relevant, but treat it as resolved if the USER message already answered or superseded it. Treat newly established facts as grounding for what happens next: build forward from them naturally instead of merely restating them or making characters forget what was just learned.');
+    if (!state && !settings.transitionGuard && !settings.dialogueFlow) return [];
     lines.push('Apply continuity to the current intimate scene. These rules impose no SFW pace, stage cap, or requirement to end or cool the scene. Explicit USER changes supersede the recorded context; never force an already answered question or resolved topic back into the scene.');
     return lines;
 }
@@ -4362,7 +4366,7 @@ function summary() {
     return { valid: snapshotMatchesMessage(message, snapshot), state: snapshot?.state ?? null,
         armed: isFullyArmed(), supervising: isSupervising(), diagnostics: diagnosticState() };
 }
-return { activateRuntime: () => { runtimeActive = true; }, onActivate, onEnable, onDisable, onClean, initialize, initializeUi, registerEvents,
+return { handoffReport: buildHandoffReport, activateRuntime: () => { runtimeActive = true; }, onActivate, onEnable, onDisable, onClean, initialize, initializeUi, registerEvents,
     observeLatestMessage, handleIncomingMessage, prepareSceneInjection, getSettings, getChatMeta,
     capturePassive, summary, diagnosticReport, clearDiagnostics, updateUi, setTab,
     syncStateTagDisplayGuard, stopStateTagDisplayGuard, runRefine, persistChat,

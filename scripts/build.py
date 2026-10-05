@@ -51,37 +51,43 @@ for kind in ('nsfw', 'sfw'):
         ...stateReportLines(getSettings()).map(line => line.replace('exactly one state block', 'one sfw_scene block in addition to the scene_state block')),
         'The stage in sfw_scene describes narrative progression; it is independent of the sexual stage in scene_state.',
     ].join('\\n');''')
-        # Reuse the existing continuity rules without importing SFW pacing,
-        # targets, stage caps, or future suggestions into the intimate scene.
+        # Share collected facts and filtered history/hints without importing
+        # the SFW pacing controller, targets, or stage caps.
         transition_rule = re.search(r"'SCENE TRANSITION GUARD: [^\n]+'", original).group(0)
         dialogue_rule = re.search(r"'DIALOGUE CONTINUITY: [^\n]+'", original).group(0)
         source += '''
 function buildUnifiedContinuityLines() {
     const settings = getSettings();
-    if (!settings.transitionGuard && !settings.dialogueFlow) return [];
     const message = assistantMessages().at(-1);
     const snapshot = snapshotForMessage(message);
     const state = snapshotMatchesMessage(message, snapshot) ? snapshot.state : null;
     const lines = ['[Shared scene continuity]'];
-    if (settings.transitionGuard) {
-        if (state) {
-            if (hasBi(state.location)) lines.push(`- Location: ${biText(state.location, 'en')}`);
-            if (hasBi(state.time)) lines.push(`- Time/context: ${biText(state.time, 'en')}`);
-            if (hasBi(state.environment)) lines.push(`- Environment: ${biText(state.environment, 'en')}`);
+    if (state) {
+        lines.push('CURRENT SHARED SCENE STATE (recorded facts):', ...buildStateLines(state));
+        if (state.intensity !== null && state.intensity !== undefined) lines.push(`- Narrative intensity: ${state.intensity}/10 (not sexual heat)`);
+        if (state.stage !== null && state.stage !== undefined) lines.push(`- Narrative stage: ${state.stage}/6 (descriptive only, not a sexual stage or pacing limit)`);
+        lines.push('Preserve important objects, appearance, physical condition, held items, posture, location, time and environment until explicit on-page actions or USER instructions change them.');
+        const acts = recentActs(Number(settings.repeatWindow) || DEFAULT_SETTINGS.repeatWindow);
+        if (acts.length) lines.push('SHARED RECENT EVENTS — avoid repeating these exact beats; do not avoid the active target scene:', ...acts.map(row => `- ${row.acts.map(act => biText(act, 'en')).join('; ')}`));
+        if (settings.dialogueBeatGuard) {
+            const dialogue = recentDialogueBeats();
+            if (dialogue.length) lines.push('SHARED RECENT DIALOGUE INTENTS — advance the conversation; direct answers and necessary clarifications are allowed:', ...dialogue.map(row => `- ${row.beats.map(beat => biText(beat, 'en')).join('; ')}`));
         }
-        lines.push(TRANSITION_RULE);
+        if (settings.nextBeatHints && unifiedHost.allowSharedHints()) {
+            const beats = unifiedHost.filterSharedHints(nextBeatCandidates({ sharedState: state }));
+            if (beats.length) lines.push(`SHARED NEXT POSSIBILITIES (optional, not facts; follow the active intimate pacing and USER intent): ${beats.map(beat => biText(beat, 'en')).join(' / ')}`);
+        }
     }
-    if (settings.dialogueFlow) {
-        if (hasBi(state?.dialogueFlow?.topic)) lines.push(`- Current conversation topic: ${biText(state.dialogueFlow.topic, 'en')}`);
-        if (hasBi(state?.dialogueFlow?.lastQuestion)) lines.push(`- Most recent direct question awaiting a response: ${biText(state.dialogueFlow.lastQuestion, 'en')}`);
-        if (state?.dialogueFlow?.newFacts?.length) lines.push(`- Newly established facts: ${state.dialogueFlow.newFacts.map(fact => biText(fact, 'en')).join('; ')}`);
-        lines.push(DIALOGUE_RULE);
-    }
+    if (settings.transitionGuard) lines.push(TRANSITION_RULE);
+    if (settings.dialogueFlow) lines.push(DIALOGUE_RULE);
+    if (!state && !settings.transitionGuard && !settings.dialogueFlow) return [];
     lines.push('Apply continuity to the current intimate scene. These rules impose no SFW pace, stage cap, or requirement to end or cool the scene. Explicit USER changes supersede the recorded context; never force an already answered question or resolved topic back into the scene.');
     return lines;
 }
 '''.replace('TRANSITION_RULE', transition_rule).replace('DIALOGUE_RULE', dialogue_rule)
+        source = source.replace('const { state } = nextBeatReport(options);', 'const { state } = options.sharedState ? { state: options.sharedState } : nextBeatReport(options);')
     else:
+        source = source.replace("const prompt = armed ? buildInjection() : '';", "const prompt = armed ? [buildInjection(), unifiedHost?.companionPrompt?.()].filter(Boolean).join('\\n\\n') : '';")
         source = source.replace('displayGuardActive = Boolean(runtimeActive && getSettings().enabled);',
                                 'displayGuardActive = Boolean(runtimeActive && (unifiedHost ? unifiedHost.anyEnabled() : getSettings().enabled));')
         source = source.replace("'c3d51f0b-6ad4-4aaa-8801-6ba5efec9a13'", "(unifiedHost ? 'ttotto-unified-hidden-reports' : 'c3d51f0b-6ad4-4aaa-8801-6ba5efec9a13')")
@@ -121,7 +127,17 @@ return { activateRuntime: () => { runtimeActive = true; }, onActivate, onEnable,
     finishReceivedGeneration, beginSceneGeneration, finishSceneGeneration, syncDiagnosticFetch };
 '''
     if kind == 'sfw':
+        api = api.replace('return { activateRuntime:', 'return { handoffReport: buildHandoffReport, activateRuntime:')
         api = api.replace('// PASSIVE_REPORT_NORMALIZATION', "const panelTime = infoPanelField(message.mes, 'Date', '날짜');\n    if (panelTime) state.time = toBi(panelTime);")
+    else:
+        api = api.replace('return { activateRuntime:', """return {
+    allowSharedHints: () => getSettings().nextBeatHints && !slowBurnTargetProgress().active,
+    filterSharedHints: beats => {
+        const ignored = ignoredActSet();
+        const bans = [...(getChatMeta(false)?.customBans ?? []), ...(getSettings().globalBans ?? [])].map(String).filter(Boolean);
+        const recent = recentActs(Number(getSettings().repeatWindow) || DEFAULT_SETTINGS.repeatWindow).flatMap(row => row.acts);
+        return beats.filter(beat => !isActIgnored(beat, ignored) && !bans.some(ban => actMatchesPlainBan(beat, ban)) && !recent.some(act => actsAreSimilar(beat, act)));
+    }, activateRuntime:""")
     header = "// Generated by scripts/build.py; edit adapters or pinned vendor sources.\nexport function createEngine(unifiedHost) {\nconst sharedRuntime = unifiedHost?.shared ?? globalThis;\nconst toastr = unifiedHost?.toasts ?? globalThis.toastr;\n// BEGIN ENGINE\n"
     footer = '\n// END ENGINE\n' + api + '\n}\n'
     dest = ROOT / 'engines' / kind

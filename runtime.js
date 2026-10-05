@@ -130,6 +130,9 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         return notify?.[level]?.(...args);
     }]));
     const host = { shared, context, chatReady, migrateMessage, capture, toasts, uiChanged, open,
+        allowSharedHints: () => engines.nsfw.allowSharedHints(),
+        filterSharedHints: beats => engines.nsfw.filterSharedHints(beats),
+        companionPrompt: () => chatReady() && engines.nsfw.summary().armed && engines.sfw.getSettings().enabled && engines.sfw.getChatMeta(false)?.enabled ? engines.sfw.handoffReport() : '',
         anyEnabled: () => kinds.some(kind => engines[kind].getSettings().enabled) };
     const engines = { nsfw: createNsfw(host), sfw: createSfw(host) };
     function latestAssistant() {
@@ -226,6 +229,6 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
     }
     return { engines, shared, settings, context, capture, dispatch, poll, start, stop, clean,
         intercept, chatReady, owner: ownerNow, get active() { return active; },
-        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.1.7', owner: ownerNow(),
+        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.1.8', owner: ownerNow(),
             sfw: JSON.parse(engines.sfw.diagnosticReport()), nsfw: JSON.parse(engines.nsfw.diagnosticReport()) }) };
 }
