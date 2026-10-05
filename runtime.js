@@ -226,6 +226,6 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
     }
     return { engines, shared, settings, context, capture, dispatch, poll, start, stop, clean,
         intercept, chatReady, owner: ownerNow, get active() { return active; },
-        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.1.6', owner: ownerNow(),
+        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.1.7', owner: ownerNow(),
             sfw: JSON.parse(engines.sfw.diagnosticReport()), nsfw: JSON.parse(engines.nsfw.diagnosticReport()) }) };
 }

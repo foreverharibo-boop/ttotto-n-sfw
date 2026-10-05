@@ -68,3 +68,12 @@
 #ttu-overlay .ttu-problems > section { padding-top: 10px; }
 #ttu-overlay .ttu-problems textarea { max-width: 100%; box-sizing: border-box; }
 #ttu-overlay [inert] { opacity: .55; }
+
+#ttu-overlay .ttu-shared-state { margin: 18px 0; padding-top: 14px; border-top: 1px solid var(--SmartThemeBorderColor, currentColor); min-width: 0; overflow-wrap: anywhere; }
+#ttu-overlay .ttu-shared-state h4 { margin: 0 0 6px; font-size: 1em; color: inherit; }
+#ttu-overlay .ttu-state-note { margin: 0 0 12px; font-size: .9em; opacity: .75; }
+#ttu-overlay .ttu-state-group { display: flex; flex-direction: column; gap: 6px; margin: 0 0 14px; }
+#ttu-overlay .ttu-state-fields { margin: 0; }
+#ttu-overlay .ttu-state-fields dt { margin-top: 6px; font-weight: 600; }
+#ttu-overlay .ttu-state-fields dd { margin: 2px 0 8px 12px; }
+#ttu-overlay .ttu-shared-state ul { margin: 0; padding-inline-start: 22px; }

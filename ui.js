@@ -3,6 +3,7 @@ const ownerLabels = { sfw: '일반 장면 추적 중', nsfw: '친밀 장면 추�
 export function createUi(getRuntime) {
     let overlay, status, notificationCheckbox, selected = 'sfw', lastFocus;
     const arrangedPanels = new WeakSet();
+    let sharedStatePanel, sharedStateKey;
     const el = (tag, text, cls) => {
         const node = document.createElement(tag);
         if (text !== undefined) node.textContent = text;
@@ -75,6 +76,73 @@ export function createUi(getRuntime) {
         }); options.append(diagnosticButton); menu.append(options);
         return menu;
     }
+    const fieldLabels = {
+        location: '장소', time: '시간·시간대', environment: '환경 상태',
+        importantObjects: '중요 사물 상태', characters: '인물 상태',
+        appearance: '외형', position: '위치·자세', holding: '소지·들고 있는 것', condition: '상태',
+        acts: '최근 전개', dialogueBeats: '최근 대화', dialogueFlow: '대화 흐름',
+        topic: '현재 주제', lastQuestion: '마지막 질문', newFacts: '새로 밝혀진 사실',
+        sceneType: '장면 유형', intensity: '장면 강도', stage: '장면 진행 단계', next: '다음 전개 후보',
+    };
+    // Render every collected field, including future fields, without interpreting
+    // narrative intensity/stage as intimate heat/stage. Names and values are text.
+    function stateValue(value, translateKeys = true) {
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+            if (Object.keys(value).every(key => key === 'en' || key === 'ko') && ('en' in value || 'ko' in value)) {
+                return el('span', value.ko || value.en || '기록 없음');
+            }
+            const list = el('dl', undefined, 'ttu-state-fields');
+            for (const [key, item] of Object.entries(value)) {
+                const detail = el('dd'); detail.append(stateValue(item));
+                list.append(el('dt', translateKeys ? fieldLabels[key] || key : key), detail);
+            }
+            return list.childElementCount ? list : el('span', '기록 없음');
+        }
+        if (Array.isArray(value)) {
+            if (!value.length) return el('span', '기록 없음');
+            const list = el('ul');
+            for (const item of value) { const row = el('li'); row.append(stateValue(item)); list.append(row); }
+            return list;
+        }
+        return el('span', value === null || value === undefined || value === '' ? '기록 없음' : String(value));
+    }
+    function refreshSharedState(runtime) {
+        const anchor = document.getElementById('tns-char-empty');
+        if (!anchor) return;
+        if (!sharedStatePanel?.isConnected) {
+            sharedStatePanel = el('section', undefined, 'ttu-shared-state');
+            sharedStatePanel.id = 'ttu-intimate-shared-state';
+            sharedStatePanel.setAttribute('aria-label', '장면·인물·대화 기록');
+            anchor.after(sharedStatePanel); sharedStateKey = undefined;
+        }
+        const ready = runtime.chatReady();
+        const snapshot = ready ? runtime.engines.sfw.summary() : null;
+        const state = snapshot?.valid ? snapshot.state : null;
+        const key = JSON.stringify([ready, Boolean(snapshot?.state), state]);
+        if (key === sharedStateKey) return;
+        sharedStateKey = key;
+        sharedStatePanel.replaceChildren(el('h4', '장면·인물·대화 기록'));
+        if (!state) {
+            sharedStatePanel.append(el('p', !ready ? '채팅을 열면 수집한 정보를 표시해요.'
+                : snapshot?.state ? '현재 본문과 기록이 일치하지 않아요. 다음 수집을 기다리고 있어요.'
+                : '현재 응답에서 수집한 장면 정보가 아직 없어요.', 'ttu-state-note'));
+            return;
+        }
+        sharedStatePanel.append(el('p', '현재 응답에서 함께 수집한 정보예요.', 'ttu-state-note'));
+        for (const [field, value] of Object.entries(state)) {
+            if (field === 'dialogueReported') continue; // Parser bookkeeping, not a collected field.
+            const group = el('div', undefined, 'ttu-state-group'); group.dataset.stateField = field;
+            group.append(el('strong', fieldLabels[field] || field));
+            if (field === 'sceneType') {
+                // Use the engine's own translated labels to keep scene types in sync.
+                const label = [...document.querySelectorAll('#tsf-state-scene-type option')].find(option => option.value === value)?.textContent;
+                group.append(el('span', label || value));
+            } else {
+                group.append(stateValue(value, !['characters', 'importantObjects'].includes(field)));
+            }
+            sharedStatePanel.append(group);
+        }
+    }
     function refresh() {
         ensureButton();
         if (!overlay || overlay.hidden) return;
@@ -111,6 +179,7 @@ export function createUi(getRuntime) {
                 diagnostic.style.removeProperty('display');
             }
         }
+        refreshSharedState(runtime);
     }
     function open(kind) {
         const owner = getRuntime().owner();
