@@ -39,7 +39,7 @@ def adapt(source, kind):
     # Saved suspension markers from older versions are not ownership authority.
     if kind == 'sfw':
         source = source.replace('suspended: Boolean(meta.nsfwSuspended), resumePending: Boolean(meta.nsfwResumePending)', "suspended: unifiedHost ? !unifiedHost.isMode('sfw') : Boolean(meta.nsfwSuspended), resumePending: unifiedHost ? false : Boolean(meta.nsfwResumePending)")
-        source = source.replace('const state = snapshotMatchesMessage(message, snapshot) ? snapshot.state : null;', 'const state = snapshotMatchesMessage(message, snapshot) ? unifiedHost.commonState() : null;')
+        source = source.replace('const state = snapshotMatchesMessage(message, snapshot) ? snapshot.state : null;', 'const state = unifiedHost.commonState();')
         controller('syncNsfwSuspension', "return !unifiedHost.isMode('sfw');")
         controller('localNsfwBlocksSfw', 'return false;')
         controller('nsfwExtensionOwnsScene', "return unifiedHost.isMode('nsfw');")
@@ -49,6 +49,20 @@ def adapt(source, kind):
         source = source.replace('const resuming = Boolean(meta?.nsfwResumePending);', 'const resuming = !unifiedHost && Boolean(meta?.nsfwResumePending);')
         source = source.replace('NSFW 장면을 다른 확장에 인계한 동안에는 SFW 보정을 쉬어요.', '현재 친밀 장면 모드에서는 일반 장면 보정을 쉬어요.')
     else:
+        # Preserve all scene facts in the intimate report, including repairs.
+        source = source.replace('    const hasCharacters = Object.values(clean.characters)',
+            "    if (unifiedHost && raw.scene) clean.scene = unifiedHost.sanitizeCommon(raw.scene);\n    const hasCharacters = Object.values(clean.characters)", 1)
+        source = source.replace('    merged.dialogueReported ||= compatible.dialogueReported;',
+            '    if (compatible.scene) merged.scene ??= compatible.scene;\n    merged.dialogueReported ||= compatible.dialogueReported;', 1)
+        source = source.replace('    const lines = [...(slowBurnEnabled ? SLOW_BURN_STATE_REPORT_LINES : STATE_REPORT_LINES)];',
+            '    const lines = [...(slowBurnEnabled ? SLOW_BURN_STATE_REPORT_LINES : STATE_REPORT_LINES), unifiedSceneReportInstruction()];', 1)
+        source = source.replace("        { role: 'system', content: system },",
+            "        { role: 'system', content: system + '\\n' + unifiedSceneReportInstruction() },", 1)
+        source += '''
+function unifiedSceneReportInstruction() {
+    return 'In the same scene_state JSON object (or the repair JSON object), include a "scene" object with the full end-of-response scene record. This is required even if no sfw_scene block is requested. Schema: "scene":{"location":"English || 한국어","time":"English || 한국어","environment":"English || 한국어","important_objects":{"object name":"current location/state, English || 한국어"},"characters":{"exact name":{"appearance":"appearance and clothing, English || 한국어","position":"posture/location, English || 한국어","holding":"carried or held items, English || 한국어","condition":"physical condition, English || 한국어"}},"scene_type":"general","intensity":0,"stage":1,"acts":[],"dialogue_beats":[],"dialogue_flow":{"topic":"English || 한국어","last_question":"English || 한국어","new_facts":[]},"next":[]}. Include every present character and relevant object. Unknown facts stay empty; never invent facts. scene.intensity and scene.stage describe narrative progression, independently of the top-level sexual heat and stage. Populate scene.acts, dialogue_beats, dialogue_flow and next from the current reply. If sfw_scene is also requested, its scene facts must agree with this record.';
+}
+'''
         # The bridge object and both private generation interceptors are never
         # installed in single-core mode, including on a shared JS object.
         source, count = re.subn(r'sharedRuntime\.ttottoNsfwSceneBridge = Object\.freeze\(\{[\s\S]*?\n\}\);', '', source, count=1)
@@ -125,7 +139,7 @@ function leaveMode() {
         const compatible = unifiedHost.isMode('nsfw') || direct?.heat >= AUTO_ARM_ON ? parseCompatibleSfwState(message.mes) : null;
         return compatible ? mergeCurrentReports(direct ?? (snapshotMatchesMessage(message) ? snapshotForMessage(message).state : null), compatible) : direct;
     },'''
-    specific = '''commonPrompt: buildHandoffReport,''' if kind == 'sfw' else '''
+    specific = '''commonPrompt: buildHandoffReport, continuityPrompt: () => buildUnifiedContinuityLines().join('\\n'), sanitizeState,''' if kind == 'sfw' else '''
     detect: (state, message) => {
         if (!isSupervising()) return;
         maybeStealthArm();
@@ -140,7 +154,7 @@ function leaveMode() {
     syncGeneration: events => { generationEvents = [...events]; },
     startSlowBurn: () => { if (getSettings().slowBurnEnabled && isFullyArmed()) startSlowBurnSessionIfNeeded(); },
     exitPrompt: () => BRIDGE_LINES.join('\\n'),
-    stripReport: stripStateTag, currentSwipeIndex, isPendingAssistant, diagnosticRecord, diagnosticTrackBody, diagnosticResponse,
+    stripReport: stripStateTag, currentSwipeIndex, isPendingAssistant, diagnosticRecord, diagnosticTrackBody, diagnosticResponse, diagnosticCache,
     rerenderMessage, saveChatMeta, populateProfiles,
 ''' + parse + specific
     return common, exports

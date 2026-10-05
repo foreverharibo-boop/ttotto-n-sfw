@@ -1278,6 +1278,7 @@ function sanitizeState(raw) {
     clean.stage = Number.isFinite(stage) ? Math.max(1, Math.min(6, Math.round(stage))) : null;
     const next = Array.isArray(raw.next) ? raw.next : [];
     clean.next = next.map(toBi).filter(hasBi).slice(0, 8);
+    if (unifiedHost && raw.scene) clean.scene = unifiedHost.sanitizeCommon(raw.scene);
     const hasCharacters = Object.values(clean.characters).some((info) => hasBi(info.clothing) || hasBi(info.position) || hasBi(info.contact));
     if (!hasBi(clean.location) && !hasCharacters && !clean.acts.length && !clean.dialogueBeats.length && clean.heat === null && clean.stage === null && !clean.next.length) return null;
     return clean;
@@ -1437,6 +1438,7 @@ function mergeCurrentReports(primary, compatible) {
     for (const field of ['acts', 'dialogueBeats', 'next']) {
         if (!merged[field]?.length) merged[field] = compatible[field];
     }
+    if (compatible.scene) merged.scene ??= compatible.scene;
     merged.dialogueReported ||= compatible.dialogueReported;
     return merged;
 }
@@ -2051,7 +2053,7 @@ const SLOW_BURN_STATE_REPORT_LINES = [
 ];
 
 function stateReportLines(slowBurnEnabled, dialogueGuard, nextGuidance = '') {
-    const lines = [...(slowBurnEnabled ? SLOW_BURN_STATE_REPORT_LINES : STATE_REPORT_LINES)];
+    const lines = [...(slowBurnEnabled ? SLOW_BURN_STATE_REPORT_LINES : STATE_REPORT_LINES), unifiedSceneReportInstruction()];
     lines.push(
         'This is a FULL STATE REPORT, not the temperature-only monitor. Always report location, every present character\'s clothing/position/contact, new acts, actual heat, and next beats. A heat-only object is incomplete.',
         'The example heat value 0 is a format placeholder. Calculate heat from the actual END of the response; do not copy the example value. If prior recorded fields are missing, reconstruct them from the latest roleplay prose without inventing facts.',
@@ -2272,7 +2274,7 @@ ${dialogueGuard ? '- "dialogue_beats" must list 0-3 conversational intents/funct
 - If something is unknown, use an empty string. Return the JSON object only.`;
     const user = `${preferenceText ? `CHARACTER PREFERENCES (reference for "next" only):\n${preferenceText}\n\n` : ''}Log excerpt (oldest first):\n\n${buildRefineInput()}`;
     return [
-        { role: 'system', content: system },
+        { role: 'system', content: system + '\n' + unifiedSceneReportInstruction() },
         { role: 'user', content: user },
     ];
 }
@@ -3727,6 +3729,10 @@ function onClean() {
 }
 
 
+function unifiedSceneReportInstruction() {
+    return 'In the same scene_state JSON object (or the repair JSON object), include a "scene" object with the full end-of-response scene record. This is required even if no sfw_scene block is requested. Schema: "scene":{"location":"English || 한국어","time":"English || 한국어","environment":"English || 한국어","important_objects":{"object name":"current location/state, English || 한국어"},"characters":{"exact name":{"appearance":"appearance and clothing, English || 한국어","position":"posture/location, English || 한국어","holding":"carried or held items, English || 한국어","condition":"physical condition, English || 한국어"}},"scene_type":"general","intensity":0,"stage":1,"acts":[],"dialogue_beats":[],"dialogue_flow":{"topic":"English || 한국어","last_question":"English || 한국어","new_facts":[]},"next":[]}. Include every present character and relevant object. Unknown facts stay empty; never invent facts. scene.intensity and scene.stage describe narrative progression, independently of the top-level sexual heat and stage. Populate scene.acts, dialogue_beats, dialogue_flow and next from the current reply. If sfw_scene is also requested, its scene facts must agree with this record.';
+}
+
 function settleReport(message, state, fresh) {
     const meta = getChatMeta(false);
     if (!meta) return;
@@ -3780,7 +3786,7 @@ return {
     syncGeneration: events => { generationEvents = [...events]; },
     startSlowBurn: () => { if (getSettings().slowBurnEnabled && isFullyArmed()) startSlowBurnSessionIfNeeded(); },
     exitPrompt: () => BRIDGE_LINES.join('\n'),
-    stripReport: stripStateTag, currentSwipeIndex, isPendingAssistant, diagnosticRecord, diagnosticTrackBody, diagnosticResponse,
+    stripReport: stripStateTag, currentSwipeIndex, isPendingAssistant, diagnosticRecord, diagnosticTrackBody, diagnosticResponse, diagnosticCache,
     rerenderMessage, saveChatMeta, populateProfiles,
 parseReport: message => {
         const direct = parseStateFromText(message.mes);

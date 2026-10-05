@@ -112,6 +112,7 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         classifying: () => core.classifying(), acceptHeat: (...args) => core.acceptHeat(...args),
         preview: kind => core.owner() === kind ? core.compose() : '',
         commonState: () => core.commonSummary().state,
+        sanitizeCommon: raw => features.sfw.sanitizeState(raw),
         allowSharedHints: () => features.nsfw.allowSharedHints(),
         filterSharedHints: beats => features.nsfw.filterSharedHints(beats),
         anyEnabled: () => kinds.some(kind => features[kind].getSettings().enabled) };
@@ -190,6 +191,6 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
     }
     return { features, core, settings, context, capture, dispatch, poll, start, stop, clean,
         intercept, chatReady, owner: ownerNow, get active() { return active; },
-        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.2.0', owner: ownerNow(), core: core.diagnostics(),
+        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.2.1', owner: ownerNow(), core: core.diagnostics(),
             sfw: JSON.parse(features.sfw.diagnosticReport()), nsfw: JSON.parse(features.nsfw.diagnosticReport()) }) };
 }

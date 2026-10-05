@@ -556,3 +556,60 @@ test('diagnostics retain receive/body/collection evidence while central state is
         assert.doesNotMatch(JSON.stringify(report), /Evidence\./);
     } finally { r.runtime.stop(); }
 });
+
+test('intimate-only report collects and injects objects and full character facts with SFW disabled', async () => {
+    const r = setup(); r.context.extensionSettings['ttotto-sfw'].enabled = false;
+    await r.runtime.start({ withUi: false });
+    try {
+        r.context.chat.push({ mes: 'Full record.' + `<scene_state>${JSON.stringify({ ...nsfw, scene: sfw })}</scene_state>` });
+        r.source.emit('MESSAGE_RECEIVED', 0);
+        const state = r.runtime.core.commonSummary();
+        assert.equal(r.runtime.owner(), 'nsfw'); assert.equal(state.valid, true);
+        assert.equal(state.state.importantObjects.key.en, 'Desk');
+        assert.equal(state.state.characters.A.holding.en, 'Cup');
+        assert.equal(state.state.characters.A.condition.en, 'Tired');
+        assert.equal(state.state.stage, 2); assert.equal(r.runtime.features.nsfw.summary().state.stage, 4);
+        assert.equal(r.context.chat[0].extra.ttottoUnifiedScene.modes.sfw, undefined);
+        await r.runtime.intercept([], 0, null, 'normal');
+        for (const text of ['Important object "key": Desk', 'holding/carrying: Cup', 'physical condition: Tired', '"scene" object']) assert.ok(r.prompts[PROMPT_KEY].includes(text), text);
+        assert.doesNotMatch(r.prompts[PROMPT_KEY], /<sfw_scene>/);
+        r.context.chat[0].mes = 'Edited record.'; r.source.emit('MESSAGE_EDITED', 0);
+        assert.equal(r.runtime.core.commonSummary().state, null);
+        const display = r.runtime.core.commonSummary({ display: true });
+        assert.equal(display.valid, false); assert.equal(display.state.importantObjects.key.en, 'Desk');
+        await r.runtime.intercept([], 0, null, 'normal');
+        assert.ok(!r.prompts[PROMPT_KEY].includes('Important object "key": Desk'));
+        r.context.chat[0].swipe_id = 1;
+        assert.equal(r.runtime.core.commonSummary({ display: true }).state, null);
+    } finally { r.runtime.stop(); }
+});
+
+test('intimate repair requests, saves and reinjects its full scene record', async () => {
+    const r = setup({ chat: [{ mes: 'Scene without report.' }] });
+    r.context.extensionSettings['ttotto-sfw'].enabled = false;
+    r.context.extensionSettings['ttotto-nsfw'].armMode = 'manual';
+    let request;
+    r.context.generateRaw = async ({ prompt }) => { request = prompt; return JSON.stringify({ ...nsfw, scene: sfw }); };
+    await r.runtime.start({ withUi: false });
+    try {
+        assert.equal(await r.runtime.features.nsfw.runRefine({ manual: true }), true);
+        assert.ok(JSON.stringify(request).includes('important_objects'));
+        assert.equal(r.runtime.core.commonSummary().state.characters.A.condition.en, 'Tired');
+        await r.runtime.intercept([], 0, null, 'normal');
+        assert.ok(r.prompts[PROMPT_KEY].includes('Important object "key": Desk'));
+    } finally { r.runtime.stop(); }
+});
+
+test('full intimate report makes scene facts available on a same-response SFW return', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        for (const heat of [8, 1]) {
+            r.context.chat.push({ mes: `Reply ${heat}.<scene_state>${JSON.stringify({ ...nsfw, heat, scene: sfw })}</scene_state>` });
+            r.source.emit('MESSAGE_RECEIVED', r.context.chat.length - 1);
+        }
+        assert.equal(r.runtime.owner(), 'sfw');
+        assert.equal(r.runtime.features.sfw.summary().state.importantObjects.key.en, 'Desk');
+        await r.runtime.intercept([], 0, null, 'normal');
+        assert.ok(r.prompts[PROMPT_KEY].includes('Important object "key": Desk'));
+    } finally { r.runtime.stop(); }
+});

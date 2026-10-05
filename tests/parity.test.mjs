@@ -21,7 +21,10 @@ for (const kind of ['sfw', 'nsfw']) {
         const withoutAccents = css => css.replace(/var\(--SmartThemeQuoteColor, currentColor\)|crimson|royalblue|#f4a261|\bred\b/g, 'THEME_ACCENT');
         assert.equal(withoutAccents(read(`modes/${kind}/style.css`)), withoutAccents(read(`vendor/${kind}/style.css`)));
         const fields = source => source.match(/function sanitizeState\(raw\) \{[\s\S]*?\n\}/)[0];
-        assert.equal(fields(adapted), fields(original));
+        // The intimate schema adds a sanitized full scene record; none of its
+        // original fields or parsing behavior may otherwise change.
+        const addedScene = '    if (unifiedHost && raw.scene) clean.scene = unifiedHost.sanitizeCommon(raw.scene);\n';
+        assert.equal(fields(adapted).replace(addedScene, ''), fields(original));
     });
 }
 test('one public interceptor and wand entry; no extension-tab panel insertion', () => {

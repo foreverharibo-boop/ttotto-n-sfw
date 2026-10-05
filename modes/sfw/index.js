@@ -3970,7 +3970,7 @@ function buildUnifiedContinuityLines() {
     const settings = getSettings();
     const message = assistantMessages().at(-1);
     const snapshot = snapshotForMessage(message);
-    const state = snapshotMatchesMessage(message, snapshot) ? unifiedHost.commonState() : null;
+    const state = unifiedHost.commonState();
     const lines = ['[Shared scene continuity]'];
     if (state) {
         lines.push('CURRENT SHARED SCENE STATE (recorded facts):', ...buildStateLines(state));
@@ -4048,7 +4048,7 @@ return {
     syncGeneration: events => { generationEvents = [...events]; },
     startSlowBurn: () => { if (getSettings().slowBurnEnabled && isFullyArmed()) startSlowBurnSessionIfNeeded(); },
     exitPrompt: () => BRIDGE_LINES.join('\n'),
-    stripReport: stripStateTag, currentSwipeIndex, isPendingAssistant, diagnosticRecord, diagnosticTrackBody, diagnosticResponse,
+    stripReport: stripStateTag, currentSwipeIndex, isPendingAssistant, diagnosticRecord, diagnosticTrackBody, diagnosticResponse, diagnosticCache,
     rerenderMessage, saveChatMeta, populateProfiles,
 parseReport: message => {
         const state = parseStateFromText(message.mes);
@@ -4057,7 +4057,7 @@ parseReport: message => {
             if (panelTime) state.time = toBi(panelTime);
         }
         return state;
-    },commonPrompt: buildHandoffReport, handoffReport: buildHandoffReport, activateRuntime: () => { runtimeActive = true; }, onActivate, onEnable, onDisable, onClean, initialize, initializeUi, registerEvents,
+    },commonPrompt: buildHandoffReport, continuityPrompt: () => buildUnifiedContinuityLines().join('\n'), sanitizeState, handoffReport: buildHandoffReport, activateRuntime: () => { runtimeActive = true; }, onActivate, onEnable, onDisable, onClean, initialize, initializeUi, registerEvents,
     observeLatestMessage, handleIncomingMessage, prepareSceneInjection, getSettings, getChatMeta,
     summary, diagnosticReport, clearDiagnostics, updateUi, setTab,
     syncStateTagDisplayGuard, stopStateTagDisplayGuard, runRefine, persistChat,

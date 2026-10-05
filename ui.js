@@ -131,17 +131,18 @@ export function createUi(getRuntime) {
         const active = ready && runtime.owner() === 'nsfw';
         sharedStatePanel.hidden = !active;
         if (!active) { sharedStatePanel.replaceChildren(); sharedStateKey = undefined; return; }
-        const snapshot = ready ? runtime.core.commonSummary() : null;
-        const state = snapshot?.valid ? snapshot.state : null;
-        const key = JSON.stringify([ready, Boolean(snapshot?.state), state]);
+        const snapshot = ready ? runtime.core.commonSummary({ display: true }) : null;
+        const state = { location: '', sceneType: '', time: '', environment: '', importantObjects: {}, characters: {},
+            intensity: null, stage: null, acts: [], dialogueBeats: [], dialogueFlow: { topic: '', lastQuestion: '', newFacts: [] }, next: [],
+            ...(snapshot?.state ?? {}) };
+        const key = JSON.stringify([ready, snapshot?.valid, Boolean(snapshot?.state), state]);
         if (key === sharedStateKey) return;
         sharedStateKey = key;
         sharedStatePanel.replaceChildren();
-        if (!state) {
-            sharedStatePanel.append(el('p', !ready ? '채팅을 열면 수집한 정보를 표시해요.'
-                : snapshot?.state ? '현재 본문과 기록이 일치하지 않아요. 다음 수집을 기다리고 있어요.'
-                : '현재 응답에서 수집한 장면 정보가 아직 없어요.', 'ttu-state-note'));
-            return;
+        if (!snapshot?.valid) {
+            sharedStatePanel.append(el('p', snapshot?.state
+                ? '저장 후 본문이 변경됐어요. 아래는 이 답변에 저장된 기록이며, 검증 전에는 다음 답변에 주입하지 않아요.'
+                : '아직 수집된 장면 정보가 없어요. 다음 응답에서 수집하거나 상태 다시 분석을 사용할 수 있어요.', 'ttu-state-note'));
         }
         const orderedFields = ['location', 'sceneType', 'time', 'environment', 'importantObjects', 'characters', 'intensity', 'stage', 'acts', 'dialogueBeats', 'dialogueFlow', 'next'];
         for (const field of [...orderedFields, ...Object.keys(state).filter(key => !orderedFields.includes(key))]) {
@@ -157,6 +158,7 @@ export function createUi(getRuntime) {
                 group.append(stateInput(fieldLabels[field] || field, value));
             } else {
                 if (field !== 'characters') group.append(el('strong', fieldLabels[field] || field));
+                if (field === 'importantObjects') group.append(el('small', '현재 장면에서 위치나 상태가 중요한 물건만 추적해요.'));
                 group.append(stateValue(value, !['characters', 'importantObjects'].includes(field)));
             }
             sharedStatePanel.append(group);

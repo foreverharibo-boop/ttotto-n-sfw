@@ -84,6 +84,14 @@ export function createSceneCore(host, features) {
                     state, at: Date.now(), messageSignature: feature.messageStateSignature(message), signatureVersion: 2,
                 };
             }
+            // A full scene in the intimate report also supplies the narrative
+            // record for a same-response return to general mode.
+            if (enabled('sfw') && !parsed.sfw && parsed.nsfw?.scene) {
+                parsed.sfw = structuredClone(parsed.nsfw.scene);
+                messageStore(message, 'sfw').swipes[String(target.swipe)] = {
+                    state: parsed.sfw, at: Date.now(), messageSignature: features.sfw.messageStateSignature(message), signatureVersion: 2,
+                };
+            }
             detect(parsed.nsfw ?? null, message);
             const clean = text => MODES.reduce((value, kind) => features[kind].stripReport(value), String(text ?? ''));
             const text = clean(message.mes);
@@ -133,19 +141,30 @@ export function createSceneCore(host, features) {
         }
         commitMode();
     }
-    function commonSummary() {
-        const snapshot = features.sfw.summary();
-        if (!snapshot.valid || !snapshot.state || !isMode('nsfw')) return snapshot;
-        const state = structuredClone(snapshot.state);
+    function commonSummary({ display = false } = {}) {
+        let snapshot = features.sfw.summary();
+        if (!isMode('nsfw')) return snapshot;
+        const intimateCurrent = features.nsfw.currentState();
+        const intimateSaved = features.nsfw.summary();
+        const currentScene = intimateCurrent.state?.scene;
+        if (currentScene) snapshot = { valid: true, state: currentScene };
+        else if (!snapshot.valid && display && intimateSaved.state?.scene) {
+            snapshot = { valid: false, state: intimateSaved.state.scene };
+        }
+        if (!snapshot.valid && !display) return { ...snapshot, state: null };
+        const state = structuredClone(snapshot.state ?? {});
         // The active mode's valid/manual facts win on overlapping fields. Do not
         // emit two contradictory locations or poses, or overwrite source reports.
-        const intimate = features.nsfw.currentState().state;
+        const intimate = intimateCurrent.state ?? (display ? intimateSaved.state : null);
         const present = value => typeof value === 'string' ? value.trim() : value?.en || value?.ko;
         if (present(intimate?.location)) state.location = structuredClone(intimate.location);
         for (const [name, person] of Object.entries(intimate?.characters ?? {})) {
-            if (state.characters?.[name] && present(person.position)) state.characters[name].position = structuredClone(person.position);
+            state.characters ??= {};
+            state.characters[name] ??= { appearance: person.clothing, holding: '', condition: '', position: '' };
+            if (present(person.position)) state.characters[name].position = structuredClone(person.position);
+            if (!present(state.characters[name].appearance) && present(person.clothing)) state.characters[name].appearance = structuredClone(person.clothing);
         }
-        return { ...snapshot, state };
+        return { ...snapshot, state: Object.keys(state).length ? state : null };
     }
     function compose() {
         if (!host.ready()) return '';
@@ -157,6 +176,7 @@ export function createSceneCore(host, features) {
         } else if (current.mode === 'nsfw') {
             parts.push(features.nsfw.buildInjection());
             if (enabled('sfw')) parts.push(features.sfw.commonPrompt());
+            else parts.push(features.sfw.continuityPrompt());
         } else {
             if (current.mode === 'sfw') parts.push(features.sfw.buildInjection());
             if (enabled('nsfw')) parts.push(features.nsfw.monitorPrompt());
