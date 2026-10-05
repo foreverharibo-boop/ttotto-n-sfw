@@ -8,6 +8,25 @@ import re
 
 
 def adapt(source, kind):
+    # Unified diagnostics are labelled as the installed extension, not the
+    # upstream feature versions. Body writes are observed once by core.js.
+    source = source.replace('extension: MODULE_NAME, version: EXTENSION_VERSION, recording:',
+        f"extension: 'ttotto-unified', mode: '{kind}', version: '0.2.5', recording:")
+    source = source.replace('current: diagnosticState(), events: diagnosticRows',
+        'bodyWriteNote: DIAGNOSTIC_NOTE, current: diagnosticState(), events: diagnosticRows')
+    source = source.replace('function clearDiagnostics() {',
+        'function clearDiagnostics() {\n    unifiedHost.resetBodyDiagnostics();')
+    source = source.replace('function syncDiagnosticFetch() {',
+        'function syncDiagnosticFetch() {\n    unifiedHost.syncBodyDiagnostics();')
+    source = source.replace("        else if (key === 'reason'", "        else if (key === 'writeTrace') values[key] = sanitizeWriteTrace(value);\n"
+        "        else if (key === 'stageSource' && ['manual', 'reported', 'heat', 'intensity', 'default'].includes(value)) values[key] = value;\n"
+        "        else if (key === 'reason'", 1)
+    source = source.replace('parsed: Boolean(state),', 'parsed: Boolean(state), ...diagnosticStage(state),')
+    source = source.replace('saved: Boolean(snapshot?.state),', "...diagnosticStage(snapshot?.state, 'saved'), saved: Boolean(snapshot?.state),", 1)
+    source = source.replace('function diagnosticState() {',
+        'function diagnosticState() {\n    const stageInfo = slowBurnStageInfo();')
+    source = source.replace('return { enabled: Boolean(settings.enabled),',
+        "return { ...diagnosticStage(effectiveState().state, 'current'), displayedStage: stageInfo.stage, stageSource: stageInfo.source, enabled: Boolean(settings.enabled),", 1)
     def guard(name, statement):
         nonlocal source
         pattern = rf'((?:async )?function {name}\([^\n]*\) \{{)'

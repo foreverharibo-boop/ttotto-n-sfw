@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import vm from 'node:vm';
 import { createRuntime, SETTINGS_KEY, META_KEY, PROMPT_KEY } from '../runtime.js';
 
 globalThis.document = { getElementById: () => null, querySelectorAll: () => [] };
@@ -21,6 +22,82 @@ function setup({ chat = [], autoRefine = false } = {}) {
     const runtime = createRuntime(() => context, { notify: Object.fromEntries(['info', 'warning', 'error', 'success'].map(level => [level, text => toasts.push([level, text])])) });
     return { runtime, context, source, prompts, toasts, writes };
 }
+
+test('unified core traces one write into both diagnostics and distinguishes saved stage from invalidated stage', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    const oldLocation = globalThis.location;
+    globalThis.location = { origin: 'http://localhost:8000' };
+    try {
+        for (const kind of ['sfw', 'nsfw']) r.runtime.settings().engines[kind].diagnosticsEnabled = true;
+        r.runtime.settings().engines.nsfw.slowBurnEnabled = true;
+        const body = 'R'.repeat(1374) + 'X'.repeat(40);
+        const message = { mes: body + tags().replace('"stage":4', '"stage":5') };
+        r.context.chat.push(message); r.source.emit('MESSAGE_RECEIVED', 0);
+        const descriptor = Object.getOwnPropertyDescriptor(message, 'mes');
+        assert.equal(typeof descriptor.set, 'function');
+        for (const kind of ['sfw', 'nsfw']) {
+            const diag = r.runtime.diagnostics()[kind];
+            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.5');
+            const writes = diag.events.filter(e => e.stage === 'body_write');
+            assert.equal(writes.length, 1); assert.equal(writes[0].data.ownWrite, true);
+            assert.equal(writes[0].data.sameSceneBody, true);
+            assert.equal(diag.current.currentStage, kind === 'nsfw' ? 5 : 2);
+        }
+        r.runtime.poll(); assert.equal(Object.getOwnPropertyDescriptor(message, 'mes').set, descriptor.set);
+        vm.runInNewContext('message.mes = message.mes.slice(0, -40)', { message },
+            { filename: 'http://localhost:8000/scripts/extensions/third-party/test-cleaner/index.js?key=PRIVATE_KEY#PRIVATE_FRAGMENT' });
+        r.source.emit('CHARACTER_MESSAGE_RENDERED', 0);
+        for (const kind of ['sfw', 'nsfw']) {
+            const diag = r.runtime.diagnostics()[kind];
+            const writes = diag.events.filter(e => e.stage === 'body_write'); assert.equal(writes.length, 2);
+            const write = writes[1].data;
+            assert.equal(write.ownWrite, false); assert.equal(write.writerLocated, true);
+            assert.equal(write.writeTrace[0].script, '/scripts/extensions/third-party/test-cleaner/index.js');
+            assert.equal(write.removedChars, 40); assert.equal(write.addedChars, 0);
+            assert.equal(write.removedLetters, 40); assert.equal(write.beforeChars, 1414); assert.equal(write.afterChars, 1374);
+            assert.equal(write.cached, false); assert.equal(write.savedStage, kind === 'nsfw' ? 5 : 2);
+            assert.equal(diag.current.currentStagePresent, false); assert.equal(diag.current.stageSource, 'default');
+            assert.equal(diag.current.displayedStage, 1);
+            assert.ok(diag.events.some(e => e.stage === 'cache_invalidated' && e.data.savedStagePresent));
+        }
+        assert.equal(r.runtime.owner(), 'nsfw'); assert.equal(r.runtime.settings().engines.nsfw.autoRefine, false);
+        const exported = JSON.stringify(r.runtime.diagnostics());
+        for (const secret of ['RRRRR', 'XXXXX', 'PRIVATE_KEY', 'PRIVATE_FRAGMENT', 'http://localhost']) assert.ok(!exported.includes(secret));
+    } finally { r.runtime.stop(); globalThis.location = oldLocation; }
+});
+
+for (const kind of ['sfw', 'nsfw']) test(`${kind}-only diagnostics trace and restore independently of the other recording switch`, async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        r.runtime.settings().engines[kind].diagnosticsEnabled = true;
+        const message = { mes: 'Reply.' + tags() }; r.context.chat.push(message); r.source.emit('MESSAGE_RECEIVED', 0);
+        assert.equal(r.runtime.diagnostics()[kind].events.filter(e => e.stage === 'body_write').length, 1);
+        assert.equal(r.runtime.diagnostics()[kind === 'sfw' ? 'nsfw' : 'sfw'].events.length, 0);
+        message.mes += ' Changed.';
+        assert.equal(JSON.parse(JSON.stringify(message)).mes, 'Reply. Changed.');
+        r.runtime.features[kind].clearDiagnostics();
+        assert.equal(Object.getOwnPropertyDescriptor(message, 'mes').get, undefined);
+        r.runtime.poll(); assert.equal(typeof Object.getOwnPropertyDescriptor(message, 'mes').set, 'function');
+        r.runtime.settings().engines[kind].diagnosticsEnabled = false;
+        r.runtime.features[kind].syncDiagnosticFetch();
+        assert.equal(Object.getOwnPropertyDescriptor(message, 'mes').get, undefined);
+        assert.equal(message.mes, 'Reply. Changed.');
+    } finally { r.runtime.stop(); }
+});
+
+test('unified body watchers release on chat change, home screen and runtime shutdown', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        r.runtime.settings().engines.nsfw.diagnosticsEnabled = true;
+        const previous = { mes: 'One' + tags() }; r.context.chat.push(previous); r.source.emit('MESSAGE_RECEIVED', 0);
+        r.context.chatMetadata = {}; r.context.chatId = 'other'; r.context.chat = [];
+        r.source.emit('CHAT_CHANGED'); assert.equal(Object.getOwnPropertyDescriptor(previous, 'mes').get, undefined);
+        const current = { mes: 'Two' + tags() }; r.context.chat.push(current); r.source.emit('MESSAGE_RECEIVED', 0);
+        r.context.characterId = null; r.runtime.poll(); assert.equal(Object.getOwnPropertyDescriptor(current, 'mes').get, undefined);
+        r.context.characterId = 0; r.runtime.poll(); assert.equal(typeof Object.getOwnPropertyDescriptor(current, 'mes').set, 'function');
+        r.runtime.stop(); assert.equal(Object.getOwnPropertyDescriptor(current, 'mes').get, undefined);
+    } finally { if (r.runtime.active) r.runtime.stop(); }
+});
 
 test('all report fields survive dual capture, native tag stripping, and separate stage meanings', async () => {
     const r = setup(); await r.runtime.start({ withUi: false });

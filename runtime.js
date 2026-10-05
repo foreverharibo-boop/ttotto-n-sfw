@@ -104,6 +104,7 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         return notify?.[level]?.(...args);
     }]));
     const host = { context, chatReady, capture, toasts, uiChanged, open,
+        syncBodyDiagnostics: () => core.syncBodyDiagnostics(), resetBodyDiagnostics: () => core.resetBodyDiagnostics(),
         messageStore: (...args) => core.messageStore(...args),
         clearRecords: (...args) => core.clearRecords(...args),
         isMode: kind => core.isMode(kind), collect: index => core.collect(index),
@@ -195,6 +196,6 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
     }
     return { features, core, settings, context, capture, dispatch, poll, start, stop, clean,
         intercept, chatReady, owner: ownerNow, get active() { return active; },
-        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.2.4', owner: ownerNow(), core: core.diagnostics(),
+        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.2.5', owner: ownerNow(), core: core.diagnostics(),
             sfw: JSON.parse(features.sfw.diagnosticReport()), nsfw: JSON.parse(features.nsfw.diagnosticReport()) }) };
 }

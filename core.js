@@ -1,5 +1,6 @@
 // The sole scene engine. Feature libraries supply schemas, policy and controls;
 // they cannot subscribe, collect independently, negotiate ownership or inject.
+import { createBodyDiagnostics } from './diagnostics.js';
 export const SCENE_STORE_KEY = 'ttottoUnifiedScene';
 const MODES = ['sfw', 'nsfw'];
 const GENERATION_TYPES = new Set(['normal', 'swipe', 'regenerate', 'continue']);
@@ -12,6 +13,20 @@ export function createSceneCore(host, features) {
     const enabled = kind => features[kind].isSupervising();
     const currentMessage = () => host.raw().chat?.filter(m => m && !m.is_user && !m.is_system).at(-1);
     const blocking = () => events.some(type => GENERATION_TYPES.has(type));
+    const bodyDiagnostics = createBodyDiagnostics({ raw: host.raw, ready: host.ready,
+        enabled: () => MODES.some(kind => features[kind].getSettings().diagnosticsEnabled),
+        swipe: message => features.sfw.currentSwipeIndex(message),
+        body: text => features.nsfw.stripReport(features.sfw.stripReport(text)).trim(),
+        record: (stage, message, data) => {
+            for (const kind of MODES) if (features[kind].getSettings().diagnosticsEnabled) features[kind].diagnosticRecord(stage, {
+                message: host.raw().chat.indexOf(message), swipe: features[kind].currentSwipeIndex(message),
+                ...data, ...features[kind].diagnosticCache(message),
+            });
+        } });
+    function syncBodyDiagnostics() {
+        bodyDiagnostics.sync();
+        bodyDiagnostics.watch(currentMessage());
+    }
     function selection() {
         if (!host.ready()) return { mode: 'waiting', phase: 'tracking' };
         const config = features.nsfw.getSettings(), meta = features.nsfw.getChatMeta(false);
@@ -73,6 +88,7 @@ export function createSceneCore(host, features) {
         if (!force && lastObserved && Object.keys(target).every(key => target[key] === lastObserved[key])) return false;
         collecting = true;
         try {
+            bodyDiagnostics.watch(message);
             const parsed = {};
             // No body mutation until both schemas have been parsed and saved.
             for (const kind of MODES) if (enabled(kind)) {
@@ -96,7 +112,7 @@ export function createSceneCore(host, features) {
             const clean = text => MODES.reduce((value, kind) => features[kind].stripReport(value), String(text ?? ''));
             const text = clean(message.mes);
             let changed = text !== message.mes;
-            message.mes = text;
+            bodyDiagnostics.write(message, text);
             if (typeof message.swipes?.[target.swipe] === 'string') {
                 const swipeText = clean(message.swipes[target.swipe]);
                 changed ||= swipeText !== message.swipes[target.swipe];
@@ -123,6 +139,7 @@ export function createSceneCore(host, features) {
     }
     function syncGeneration() { for (const feature of Object.values(features)) feature.syncGeneration(events); }
     function reset() {
+        bodyDiagnostics.reset();
         events = []; rewriteMode = null; windDown = null; lastObserved = null;
         mode = 'waiting'; phase = 'tracking';
         for (const feature of Object.values(features)) feature.resetFeatureSession();
@@ -139,8 +156,10 @@ export function createSceneCore(host, features) {
         }
     }
     function refresh() {
+        bodyDiagnostics.sync();
         if (!host.ready()) { host.publish(''); return; }
         syncChat();
+        syncBodyDiagnostics();
         if (!blocking()) {
             collect();
             detect(null, null);
@@ -274,6 +293,7 @@ export function createSceneCore(host, features) {
         classifying: () => classifying, holdsRewrite: () => Boolean(rewriteMode && blocking()),
         owner: () => selection().mode,
         diagnostics: () => ({ mode: selection().mode, phase: selection().phase, pendingGenerations: events.length, rewriteMode }),
+        syncBodyDiagnostics, resetBodyDiagnostics: bodyDiagnostics.reset,
         canRefine: (kind, manual = false) => host.ready() && !blocking() && (isMode(kind) || kind === 'nsfw' && enabled('nsfw') && (manual || features.nsfw.getSettings().armMode === 'auto')),
     };
 }

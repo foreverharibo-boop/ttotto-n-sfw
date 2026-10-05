@@ -213,6 +213,7 @@ export function createUi(getRuntime) {
             const diagnostic = document.getElementById(`${prefix}-panel-diagnostics`);
             const settingsPanel = document.getElementById(`${prefix}-panel-settings`);
             if (!arrangedPanels.has(panel) && diagnostic && settingsPanel) {
+                diagnostic.append(el('p', '진단 기록을 켜고 새 답변을 받으면 본문 변경량·문자 종류와 추적 가능한 쓰기 호출의 스크립트 위치를 남겨요. 슬로우번 단계도 보고값·저장값·현재 유효값·표시값을 구분해요. 대화 원문은 내보내지 않으며, 추적 전 변경이나 객체 교체의 원인은 미확인으로 남겨요.', 'ttu-state-note'));
                 const problems = el('details', undefined, 'ttu-problems');
                 problems.append(el('summary', '문제 해결'), diagnostic);
                 settingsPanel.append(problems);
