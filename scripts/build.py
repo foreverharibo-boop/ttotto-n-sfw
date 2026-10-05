@@ -42,6 +42,7 @@ for kind in ('nsfw', 'sfw'):
         source = source.replace('function clearLegacyDiagnostics() {', 'function clearLegacyDiagnostics() {\n    if (unifiedHost) return;')
         for name in ('syncStateTagDisplayGuard', 'stopStateTagDisplayGuard'):
             source = source.replace(f'function {name}() {{', f'function {name}() {{\n    if (unifiedHost) return;')
+        source = source.replace('const delegationDraining = meta.nsfwSuspended', 'const delegationDraining = (!unifiedHost || unifiedHost.nsfwCanDrain()) && meta.nsfwSuspended')
         source = source.replace('function buildHandoffReport() {', '''function buildHandoffReport() {
     if (unifiedHost) return [
         ...buildUnifiedContinuityLines(),

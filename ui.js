@@ -129,15 +129,6 @@ export function createUi(getRuntime) {
         }
         const ready = runtime.chatReady();
         const active = ready && runtime.owner() === 'nsfw';
-        const root = document.getElementById('ttotto-nsfw-settings');
-        root.classList.toggle('ttu-intimate-idle', !active);
-        let idleNote = document.getElementById('ttu-intimate-idle-note');
-        if (!idleNote) {
-            idleNote = el('p', '친밀 장면 감지 대기 중이에요. 개입을 시작하면 수집한 정보를 표시해요.', 'ttu-state-note');
-            idleNote.id = 'ttu-intimate-idle-note';
-            document.querySelector('#tns-panel-state > .tns-section-head').after(idleNote);
-        }
-        idleNote.hidden = active;
         sharedStatePanel.hidden = !active;
         if (!active) { sharedStatePanel.replaceChildren(); sharedStateKey = undefined; return; }
         const snapshot = ready ? runtime.engines.sfw.summary() : null;
@@ -169,6 +160,25 @@ export function createUi(getRuntime) {
                 group.append(stateValue(value, !['characters', 'importantObjects'].includes(field)));
             }
             sharedStatePanel.append(group);
+        }
+    }
+    function refreshSceneVisibility(runtime) {
+        const owner = runtime.owner();
+        for (const [kind, prefix] of [['sfw', 'tsf'], ['nsfw', 'tns']]) {
+            const root = document.getElementById(`ttotto-${kind}-settings`);
+            if (!root) continue;
+            const active = runtime.chatReady() && owner === kind;
+            root.classList.toggle('ttu-scene-idle', !active);
+            let note = document.getElementById(`ttu-${kind}-idle-note`);
+            if (!note) {
+                note = el('p', undefined, 'ttu-state-note ttu-idle-note'); note.id = `ttu-${kind}-idle-note`;
+                document.querySelector(`#${prefix}-panel-state > .${prefix}-section-head`)?.after(note);
+            }
+            note.textContent = !runtime.chatReady() ? '채팅을 열면 장면을 추적해요.'
+                : owner === 'nsfw' ? '친밀 장면에서 수집·관리 중이에요. 일반 장면은 쉬고 있어요.'
+                : owner === 'sfw' ? '일반 장면에서 수집·관리 중이에요. 친밀 장면은 감지 대기 중이에요.'
+                : '현재 개입 대기 중이에요. 개입을 시작하면 수집한 정보를 표시해요.';
+            note.hidden = active;
         }
     }
     function refresh() {
@@ -207,6 +217,7 @@ export function createUi(getRuntime) {
                 diagnostic.style.removeProperty('display');
             }
         }
+        refreshSceneVisibility(runtime);
         refreshSharedState(runtime);
     }
     function open(kind) {

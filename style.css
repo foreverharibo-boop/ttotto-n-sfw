@@ -76,5 +76,7 @@
 #ttu-overlay .ttu-shared-state .text_pole { width: 100%; min-width: 0; box-sizing: border-box; }
 #ttu-overlay .ttu-shared-state input[readonly] { background: var(--SmartThemeBlurTintColor, transparent); color: var(--SmartThemeBodyColor, inherit); border: 1px solid var(--SmartThemeBorderColor, currentColor); border-radius: 8px; opacity: 1; }
 #ttu-overlay .ttu-record-chip { padding: 5px 8px; border-radius: 8px; background: color-mix(in srgb, currentColor 6%, transparent); }
-#ttu-body .ttu-intimate-idle #tns-panel-state > :not(:first-child):not(.tns-button-row):not(#tns-prompt-preview):not(#tns-slow-burn-card):not(#ttu-intimate-idle-note) { display: none !important; }
-#ttu-body .ttu-intimate-idle #tns-heat, #ttu-body .ttu-intimate-idle #tns-state-source { display: none !important; }
+#ttu-body .ttu-scene-idle #tns-panel-state > :not(:first-child):not(.tns-button-row):not(#tns-prompt-preview):not(.ttu-idle-note),
+#ttu-body .ttu-scene-idle #tsf-panel-state > :not(:first-child):not(.tsf-button-row):not(#tsf-prompt-preview):not(.ttu-idle-note) { display: none !important; }
+#ttu-body .ttu-scene-idle #tns-heat, #ttu-body .ttu-scene-idle #tns-state-source,
+#ttu-body .ttu-scene-idle #tsf-intensity, #ttu-body .ttu-scene-idle #tsf-state-source { display: none !important; }

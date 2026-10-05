@@ -1339,7 +1339,7 @@ function syncNsfwSuspension({ notify = false } = {}) {
     }
     // NSFW판의 마지막 브릿지 생성과 SFW 복귀 주입이 같은 요청에 겹치지 않도록,
     // NSFW판이 마지막으로 담당한 뒤 AI 응답 하나가 추가될 때까지 인계를 유지한다.
-    const delegationDraining = meta.nsfwSuspended
+    const delegationDraining = (!unifiedHost || unifiedHost.nsfwCanDrain()) && meta.nsfwSuspended
         && !delegated
         && !immediateHandoff
         && Number.isInteger(meta.nsfwDelegatedAtAssistantCount)

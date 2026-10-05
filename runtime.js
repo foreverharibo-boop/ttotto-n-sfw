@@ -25,6 +25,7 @@ export function migratedContainer(parent, key, oldKeys, changed = () => {}) {
 export function createRuntime(getContext, { onUi = () => {}, open = () => {}, notify = globalThis.toastr } = {}) {
     let active = false, pollTimer = null, uiQueued = false, capturing = false;
     let owner = null, transitionTimer = null;
+    let promptBatchDepth = 0, promptDirty = false;
     const upstream = new Map(), listeners = new Map(), promptSlots = new Map();
     const metadataViews = new WeakMap(), settingsViews = new WeakMap();
     const shared = {};
@@ -64,10 +65,22 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         queueMicrotask(() => { uiQueued = false; if (active) { updateOwner(); onUi(); } });
     }
     function publishPrompt() {
+        if (promptBatchDepth) { promptDirty = true; return; }
+        promptDirty = false;
         const context = getContext();
         let prompt = chatReady() ? kinds.map(kind => promptSlots.get(kind) || '').filter(Boolean).join('\n\n') : '';
         if (prompt.includes('<scene_state>') && prompt.includes('<sfw_scene>')) prompt += '\n\n[Unified report coordination]\nBoth report types are requested: output exactly one scene_state block and exactly one sfw_scene block. A one-report instruction applies separately to each tag type. Report bookkeeping must not change the story. Sexual heat/stage and narrative intensity/stage are independent; never substitute one for the other.';
         context.setExtensionPrompt(PROMPT_KEY, prompt, 1, 0, false, 0);
+    }
+    // Each host operation publishes only its completed composition. Consumers
+    // must never observe a new NSFW directive mixed with a stale SFW directive.
+    function finishPromptBatch() {
+        promptBatchDepth--;
+        if (!promptBatchDepth && promptDirty) publishPrompt();
+    }
+    function batchPromptChanges(action) {
+        promptBatchDepth++;
+        try { return action(); } finally { finishPromptBatch(); }
     }
     function ensureSubscription(event) {
         if (!active || upstream.has(event)) return;
@@ -130,6 +143,10 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         return notify?.[level]?.(...args);
     }]));
     const host = { shared, context, chatReady, migrateMessage, capture, toasts, uiChanged, open,
+        nsfwCanDrain: () => {
+            const config = engines.nsfw.getSettings();
+            return config.enabled && config.adultConfirmed && config.exitBridge;
+        },
         allowSharedHints: () => engines.nsfw.allowSharedHints(),
         filterSharedHints: beats => engines.nsfw.filterSharedHints(beats),
         companionPrompt: () => chatReady() && engines.nsfw.summary().armed && engines.sfw.getSettings().enabled && engines.sfw.getChatMeta(false)?.enabled ? engines.sfw.handoffReport() : '',
@@ -155,6 +172,9 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         }, 200);
     }
     function dispatch(event, ...args) {
+        return batchPromptChanges(() => dispatchEvent(event, ...args));
+    }
+    function dispatchEvent(event, ...args) {
         if (!active) return;
         const types = getContext().eventTypes ?? getContext().event_types ?? {};
         if (event === types.CHAT_CHANGED) { owner = null; clearTimeout(transitionTimer); promptSlots.clear(); publishPrompt(); }
@@ -170,6 +190,9 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         uiChanged();
     }
     function poll() {
+        return batchPromptChanges(pollEngines);
+    }
+    function pollEngines() {
         if (!active) return;
         if (!chatReady()) {
             owner = null; clearTimeout(transitionTimer); promptSlots.clear(); publishPrompt(); onUi(); return;
@@ -212,9 +235,12 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
     }
     async function intercept(chat, size, abort, type) {
         if (!chatReady()) { promptSlots.clear(); publishPrompt(); return; }
-        await shared.ttottoNsfwGenerationInterceptor(chat, size, abort, type);
-        await shared.ttottoSfwGenerationInterceptor(chat, size, abort, type);
-        updateOwner();
+        promptBatchDepth++;
+        try {
+            await shared.ttottoNsfwGenerationInterceptor(chat, size, abort, type);
+            await shared.ttottoSfwGenerationInterceptor(chat, size, abort, type);
+            updateOwner();
+        } finally { finishPromptBatch(); }
     }
     function clean() {
         stop();
@@ -229,6 +255,6 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
     }
     return { engines, shared, settings, context, capture, dispatch, poll, start, stop, clean,
         intercept, chatReady, owner: ownerNow, get active() { return active; },
-        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.1.8', owner: ownerNow(),
+        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.1.9', owner: ownerNow(),
             sfw: JSON.parse(engines.sfw.diagnosticReport()), nsfw: JSON.parse(engines.nsfw.diagnosticReport()) }) };
 }

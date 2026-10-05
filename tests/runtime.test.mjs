@@ -11,15 +11,15 @@ const sfw = { location: 'Room || 방', time: 'Morning || 아침', environment: '
 const nsfw = { location: 'Room || 방', characters: { A: { clothing: 'Coat || 코트', position: 'Chair || 의자', contact: 'Hand || 손' } }, acts: ['Talk || 대화'], dialogue_beats: ['Question || 질문'], heat: 8, stage: 4, next: ['Listen || 듣기'] };
 const tags = (heat = 8) => `<scene_state>${JSON.stringify({ ...nsfw, heat })}</scene_state><sfw_scene>${JSON.stringify(sfw)}</sfw_scene>`;
 function setup({ chat = [], autoRefine = false } = {}) {
-    const source = new EventEmitter(), prompts = {}, toasts = [];
+    const source = new EventEmitter(), prompts = {}, toasts = [], writes = [];
     const eventTypes = Object.fromEntries(['GENERATION_STARTED', 'MESSAGE_RECEIVED', 'GENERATION_ENDED', 'GENERATION_STOPPED', 'CHARACTER_MESSAGE_RENDERED', 'MESSAGE_SWIPED', 'MESSAGE_EDITED', 'MESSAGE_DELETED', 'CHAT_CHANGED', 'CHAT_CREATED', 'CONNECTION_PROFILE_LOADED'].map(name => [name, name]));
     const context = { characterId: 0, chatId: 'test-chat', chat, chatMetadata: {}, extensionSettings: {
         'ttotto-sfw': { enabled: true, settingsSchemaVersion: 4, autoRefine, slowBurnEnabled: false, futureField: { keep: 42 } },
         'ttotto-nsfw': { enabled: true, settingsSchemaVersion: 3, adultConfirmed: true, armMode: 'auto', autoRefine, slowBurnEnabled: false },
-    }, eventSource: source, eventTypes, setExtensionPrompt(key, value) { prompts[key] = value; },
+    }, eventSource: source, eventTypes, setExtensionPrompt(key, value) { prompts[key] = value; writes.push({ key, value }); },
     saveSettingsDebounced() {}, saveMetadataDebounced() {}, saveChat() {}, generateRaw: async () => { throw Error('Unexpected AI call'); } };
     const runtime = createRuntime(() => context, { notify: Object.fromEntries(['info', 'warning', 'error', 'success'].map(level => [level, text => toasts.push([level, text])])) });
-    return { runtime, context, source, prompts, toasts };
+    return { runtime, context, source, prompts, toasts, writes };
 }
 
 test('all report fields survive dual capture, native tag stripping, and separate stage meanings', async () => {
@@ -278,4 +278,104 @@ test('intimate next-generation prompt contains all collected common data and nat
         r.context.chatId = 'different-chat'; r.context.chat = []; r.context.chatMetadata = {}; r.source.emit('CHAT_CHANGED');
         await r.runtime.intercept([], 1000, null, 'normal'); assert.doesNotMatch(r.prompts[PROMPT_KEY], /Desk|Cup|Tired/);
     } finally { r.runtime.stop(); }
+});
+
+
+test('repeated handoffs publish one complete prompt and preserve both collected schemas', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        r.runtime.settings().engines.sfw.globalBans = ['GENERAL_BRANCH_LIMIT'];
+        r.runtime.settings().engines.nsfw.globalBans = ['INTIMATE_BRANCH_LIMIT'];
+        for (const heat of [1, 8, 1, 7, 8, 1]) {
+            r.source.emit('GENERATION_STARTED', 'normal');
+            r.context.chat.push({ mes: `Reply ${r.context.chat.length}.` + tags(heat) });
+            r.source.emit('MESSAGE_RECEIVED', r.context.chat.length - 1);
+            const expected = heat >= 7 ? 'nsfw' : 'sfw';
+            assert.equal(r.runtime.owner(), expected);
+            assert.equal(r.runtime.engines.sfw.summary().armed, expected === 'sfw');
+            assert.equal(r.runtime.engines.nsfw.summary().armed, expected === 'nsfw');
+            r.writes.length = 0;
+            await r.runtime.intercept([], 1000, null, 'normal');
+            assert.equal(r.writes.length, 1, 'publish only the complete composition');
+            assert.equal(r.writes[0].key, PROMPT_KEY);
+            const prompt = r.writes[0].value;
+            assert.equal((prompt.match(/\[Scene Continuity Directive\]/g) || []).length, 1);
+            assert.match(prompt, new RegExp(expected === 'nsfw' ? 'INTIMATE_BRANCH_LIMIT' : 'GENERAL_BRANCH_LIMIT'));
+            assert.doesNotMatch(prompt, new RegExp(expected === 'nsfw' ? 'GENERAL_BRANCH_LIMIT' : 'INTIMATE_BRANCH_LIMIT'));
+            assert.match(prompt, /Important object "key": Desk/);
+            assert.match(prompt, /holding\/carrying: Cup/);
+            assert.equal(r.runtime.engines.sfw.summary().valid, true);
+            assert.equal(r.runtime.engines.nsfw.summary().valid, true);
+            const stable = prompt; r.writes.length = 0;
+            await r.runtime.intercept([], 1000, null, 'quiet');
+            assert.equal(r.writes.length, 0); assert.equal(r.prompts[PROMPT_KEY], stable);
+            r.source.emit('GENERATION_ENDED');
+        }
+    } finally { r.runtime.stop(); }
+});
+
+test('both active modes retain style, pacing, bans, hints, CardInject and slow-burn controls', async () => {
+    for (const kind of ['sfw', 'nsfw']) {
+        const r = setup(); await r.runtime.start({ withUi: false });
+        try {
+            r.context.characters = [{ name: 'A', avatar: 'a.png' }]; r.context.name1 = 'Reader';
+            r.context.extensionSettings.cardinject = { perChar: { 'a.png': { categories: [{ key: 'preferences', name: 'Preferences', content: '{{char}} likes UNIQUE_CARD_FACT with {{user}}.', enabled: false }] } } };
+            const config = r.runtime.settings().engines[kind];
+            Object.assign(config, { globalBans: ['UNIQUE_HARD_LIMIT'], paceMode: 'hold', styleLength: 'long', styleBalance: 'dialogue', cardLinkEnabled: true, cardLinkSelected: { 'a.png': ['preferences'] }, nextBeatHints: true, dialogueBeatGuard: true });
+            r.context.chat.push({ mes: 'Current.' + tags(kind === 'nsfw' ? 8 : 1) }); r.source.emit('MESSAGE_RECEIVED', 0);
+            r.runtime.engines[kind].getChatMeta().customBans = ['UNIQUE_CHAT_BAN'];
+            await r.runtime.intercept([], 1000, null, 'normal');
+            const p = r.prompts[PROMPT_KEY];
+            for (const text of ['UNIQUE_HARD_LIMIT', 'UNIQUE_CHAT_BAN', 'Length: write a full', 'Balance: dialogue-forward', 'PACING:', 'UNIQUE_CARD_FACT', 'Reader', 'ALREADY HAPPENED', 'DIALOGUE INTENTS ALREADY USED', 'SUGGESTED NEXT BEATS']) assert.ok(p.includes(text), kind + ': ' + text);
+            config.slowBurnEnabled = true;
+            await r.runtime.intercept([], 1000, null, 'normal');
+            assert.match(r.prompts[PROMPT_KEY], /STAGE|stage/);
+            assert.doesNotMatch(r.prompts[PROMPT_KEY], /PACING:/);
+            assert.equal(r.runtime.owner(), kind);
+        } finally { r.runtime.stop(); }
+    }
+});
+
+test('disabling intimate mode releases SFW and disabling both clears directives', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        r.context.chat.push({ mes: 'Current.' + tags() }); r.source.emit('MESSAGE_RECEIVED', 0);
+        assert.equal(r.runtime.owner(), 'nsfw');
+        r.runtime.settings().engines.nsfw.enabled = false;
+        r.runtime.poll(); await r.runtime.intercept([], 1000, null, 'normal');
+        assert.equal(r.runtime.owner(), 'sfw');
+        assert.match(r.prompts[PROMPT_KEY], /Important object "key": Desk/);
+        r.runtime.settings().engines.sfw.enabled = false;
+        r.runtime.poll(); await r.runtime.intercept([], 1000, null, 'normal');
+        assert.equal(r.prompts[PROMPT_KEY], '');
+        assert.equal(r.runtime.owner(), 'waiting');
+    } finally { r.runtime.stop(); }
+});
+
+test('chat disable preserves the optional one-shot exit bridge, then hands off to SFW', async () => {
+    for (const exitBridge of [false, true]) {
+        const r = setup(); await r.runtime.start({ withUi: false });
+        try {
+            r.context.chat.push({ mes: 'Current.' + tags() }); r.source.emit('MESSAGE_RECEIVED', 0);
+            assert.equal(r.runtime.owner(), 'nsfw');
+            r.runtime.settings().engines.nsfw.exitBridge = exitBridge;
+            const meta = r.runtime.engines.nsfw.getChatMeta();
+            // Same metadata transition as the native per-chat toggle.
+            Object.assign(meta, { enabled: false, autoArmed: false, forceArmed: false, bridgePending: exitBridge });
+            r.runtime.poll();
+            await r.runtime.intercept([], 1000, null, 'normal');
+            if (exitBridge) assert.match(r.prompts[PROMPT_KEY], /\[Scene Wind-Down\]/);
+            else {
+                assert.equal(r.runtime.owner(), 'sfw');
+                assert.doesNotMatch(r.prompts[PROMPT_KEY], /\[Scene Wind-Down\]/);
+            }
+            assert.equal(meta.bridgePending, false);
+            r.context.chat.push({ mes: 'Next ordinary reply.' + tags(1) });
+            r.source.emit('MESSAGE_RECEIVED', 1); r.source.emit('GENERATION_ENDED');
+            await r.runtime.intercept([], 1000, null, 'normal');
+            assert.equal(r.runtime.owner(), 'sfw');
+            assert.doesNotMatch(r.prompts[PROMPT_KEY], /\[Scene Wind-Down\]/);
+            assert.match(r.prompts[PROMPT_KEY], /Important object "key": Desk/);
+        } finally { r.runtime.stop(); }
+    }
 });
