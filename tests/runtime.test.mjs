@@ -632,3 +632,55 @@ test('intimate lists include nested scene events and hints once, retaining exclu
         assert.equal(r.runtime.features.nsfw.currentState().state.characters.A.contact.en, 'Hand');
     } finally { r.runtime.stop(); }
 });
+
+test('failed injection clears old facts, preserves a pending bridge and permits recovery', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        for (const kind of ['sfw', 'nsfw']) r.runtime.settings().engines[kind].diagnosticsEnabled = true;
+        r.context.chat.push({ mes: 'Before failure.' + tags(8) }); r.source.emit('MESSAGE_RECEIVED', 0);
+        await r.runtime.intercept([], 0, null, 'normal');
+        assert.match(r.prompts[PROMPT_KEY], /Important object "key": Desk/);
+        const feature = r.runtime.features.nsfw, original = feature.buildInjection;
+        feature.buildInjection = () => { throw Error('private dialogue must not be exported'); };
+        await assert.doesNotReject(r.runtime.intercept([], 0, null, 'normal'));
+        assert.equal(r.prompts[PROMPT_KEY], '');
+        for (const kind of ['sfw', 'nsfw']) {
+            const diagnostic = r.runtime.diagnostics()[kind];
+            assert.ok(diagnostic.events.some(e => e.stage === 'injection_error' && e.data.cleared));
+            assert.doesNotMatch(JSON.stringify(diagnostic), /private dialogue/);
+        }
+        feature.buildInjection = original;
+        await r.runtime.intercept([], 0, null, 'normal');
+        assert.match(r.prompts[PROMPT_KEY], /Important object "key": Desk/);
+        const meta = feature.getChatMeta();
+        r.runtime.settings().engines.nsfw.exitBridge = true;
+        Object.assign(meta, { enabled: false, autoArmed: false, forceArmed: false, bridgePending: true });
+        const publish = r.context.setExtensionPrompt;
+        r.context.setExtensionPrompt = (key, value) => { if (value) throw Error('host write failed'); publish(key, value); };
+        await assert.doesNotReject(r.runtime.intercept([], 0, null, 'normal'));
+        assert.equal(r.prompts[PROMPT_KEY], '');
+        assert.equal(meta.bridgePending, true);
+        r.context.setExtensionPrompt = publish;
+        await r.runtime.intercept([], 0, null, 'normal');
+        assert.match(r.prompts[PROMPT_KEY], /\[Scene Wind-Down\]/);
+        assert.equal(meta.bridgePending, false);
+    } finally { r.runtime.stop(); }
+});
+
+test('settled, invalidated and chat-change diagnostics reflect collection without poll flooding', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        for (const kind of ['sfw', 'nsfw']) r.runtime.settings().engines[kind].diagnosticsEnabled = true;
+        r.context.chat.push({ mes: 'Collected.' + tags(8) }); r.source.emit('MESSAGE_RECEIVED', 0);
+        for (const kind of ['sfw', 'nsfw']) assert.ok(r.runtime.diagnostics()[kind].events.some(e => e.stage === 'collection_settled' && e.data.cached));
+        r.context.chat[0].mes = 'Changed body.'; r.source.emit('MESSAGE_EDITED', 0);
+        const before = r.runtime.diagnostics();
+        for (const kind of ['sfw', 'nsfw']) assert.ok(before[kind].events.some(e => e.stage === 'cache_invalidated' && e.data.reason === 'body_signature_mismatch'));
+        r.runtime.poll(); r.runtime.poll();
+        for (const kind of ['sfw', 'nsfw']) assert.deepEqual(r.runtime.diagnostics()[kind].events.filter(e => e.stage === 'cache_invalidated'), before[kind].events.filter(e => e.stage === 'cache_invalidated'));
+        r.context.chatId = 'another'; r.context.chat = []; r.context.chatMetadata = {};
+        r.source.emit('CHAT_CHANGED');
+        for (const kind of ['sfw', 'nsfw']) assert.ok(r.runtime.diagnostics()[kind].events.some(e => e.stage === 'chat_changed'));
+        assert.equal(r.prompts[PROMPT_KEY], '');
+    } finally { r.runtime.stop(); }
+});

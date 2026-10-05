@@ -106,6 +106,12 @@ export function createSceneCore(host, features) {
                 const feature = features[kind];
                 const state = feature.snapshotMatchesMessage(message) ? feature.snapshotForMessage(message)?.state : null;
                 feature.settleReport(message, state, Boolean(parsed[kind]));
+                if (!state && feature.snapshotForMessage(message)?.state) feature.diagnosticRecord('cache_invalidated', {
+                    reason: 'body_signature_mismatch', message: host.raw().chat.indexOf(message), swipe: target.swipe, ...feature.diagnosticCache(message),
+                });
+                if (state && (changed || parsed[kind])) feature.diagnosticRecord('collection_settled', {
+                    message: host.raw().chat.indexOf(message), swipe: target.swipe, ...feature.diagnosticCache(message),
+                });
                 feature.diagnosticTrackBody(message, host.raw().chat.indexOf(message), 'after_collection');
             }
             lastObserved = { ...target, text: String(message.mes ?? '') };
@@ -190,6 +196,20 @@ export function createSceneCore(host, features) {
     }
     function prepare(type = 'normal', consumeBridge = true) {
         if (normalize(type) === 'quiet') return;
+        try {
+            // Publish a complete composition once; clear it if preparation fails.
+            return prepareInjection(type, consumeBridge);
+        } catch {
+            let cleared = false;
+            try { host.publish(''); cleared = true; } catch { /* Host itself may be unavailable. */ }
+            for (const feature of Object.values(features)) {
+                try { feature.diagnosticRecord('injection_error', { reason: 'prepare_failed', cleared }); } catch { /* Diagnostics must not stop generation. */ }
+            }
+            console.error('[또또(N)SFW] 주입 준비 실패 — 본 채팅 생성은 계속합니다.');
+            return false;
+        }
+    }
+    function prepareInjection(type, consumeBridge) {
         if (!host.ready()) { host.publish(''); return; }
         syncChat();
         if (!GENERATION_TYPES.has(normalize(type))) { host.publish(''); return; }
@@ -212,7 +232,11 @@ export function createSceneCore(host, features) {
         }
     }
     function event(name, ...args) {
-        if (name === 'CHAT_CHANGED') { chatIdentity = null; syncChat(); refresh(); return; }
+        if (name === 'CHAT_CHANGED') {
+            chatIdentity = null; syncChat();
+            for (const feature of Object.values(features)) feature.diagnosticRecord('chat_changed');
+            refresh(); return;
+        }
         if (name === 'CONNECTION_PROFILE_LOADED') { for (const f of Object.values(features)) f.populateProfiles(); return; }
         if (!host.ready()) return;
         syncChat();

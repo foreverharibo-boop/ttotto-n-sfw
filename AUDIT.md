@@ -1,3 +1,36 @@
+# 0.2.3 요청 경계 검증 및 누락 보호 복구
+
+주입문 미리보기나 `setExtensionPrompt` 호출 여부에 그치지 않고 Silly 공식 함수로 만든 전송 직전 JSON을 검사했다. 기존 배포 대상 검사 35개에 예외/진단 회귀 2개, 공식 소스 계약 검사 5개를 추가해 **42개 통과, 실패/건너뜀 0개**다.
+
+## 검증 범위
+
+- 실제 배포 `runtime.js`/`core.js`/기능 모듈에서 보고서를 수집하고 다음 요청을 준비했다.
+- Silly 공식 `runGenerationInterceptors`, `setExtensionPrompt`, `getExtensionPrompt`, `getExtensionPromptMaxDepth`, `populationInjectionPrompts`, `createGenerationParameters`, `sendOpenAIRequest` 함수를 소스에서 변경 없이 추출해 실행했다. 매니페스트의 인터셉터 이름으로 실제 런타임을 연결했다.
+- 네트워크 `fetch`를 가로채 `/api/backends/chat-completions/generate`로 나갈 POST JSON을 저장하고 즉시 중단했다. 원문과 API 키는 사용하지 않고 고유한 테스트 값만 사용했다.
+- OpenAI, Claude, Gemini, Vertex full, Vertex express의 각 설정에서 12회씩, 총 60회 검사했다. 일반 생성의 비스트리밍/스트리밍 플래그, quiet, continue, swipe, regenerate를 포함한다.
+- SFW의 장소·시간·환경·사물·인물 외형/자세/소지/상태·전개·대사 의도·대화 주제/질문/사실·후보, NSFW의 같은 항목과 접촉을 실제 JSON에서 확인했다. NSFW 단독 보고서의 `scene`도 포함된다.
+- 주입 슬롯의 system 역할/깊이 0, 합쳐진 주입 1회, SFW→NSFW→SFW 전환을 확인했다. 본문 변경·재생성·스와이프·다른 채팅에서는 이전 현재 사실을 주입하지 않고, 홈/중지에서는 비웠다.
+- 빌더 예외 및 호스트 등록 실패 시 기존 주입 제거, 예외의 채팅 생성 전파 차단, 종료 브릿지 보존, 다음 준비 재시도를 검사했다. 호스트 자체가 비우기까지 거부하면 `injection_error.cleared=false`로 남긴다. 예외 문자열은 진단에 넣지 않는다.
+- `collection_settled`, `cache_invalidated`, `chat_changed`를 양 모드에서 복구하고, 변경 없는 감시 주기에 같은 무효화 로그가 반복되지 않는지 검사했다.
+
+## 재현
+
+`tests/request-boundary.test.mjs`는 외부 소스를 별도로 준비해야 실행한다. `SILLY_SOURCE_DIR`가 없으면 이 5개만 건너뛰므로 기본 `npm test` 결과를 42개 실행으로 표현해서는 안 된다.
+
+공식 저장소 `SillyTavern/SillyTavern`, release 커밋 `06bde939fb1e9c4c8d8641d810f0a916b5bce127`에서 다음 파일을 받아 한 디렉터리에 각각 `script.js`, `extensions.js`, `openai.js`로 둔다. 테스트가 Git blob SHA를 검사하므로 변경된 소스는 실패한다.
+
+| 원본 경로 | Git blob SHA |
+| --- | --- |
+| `public/script.js` | `777a2d5983a6283ef9b26726e75192da1e3f3cea` |
+| `public/scripts/extensions.js` | `3c1cd876e603a64af9bc74c6e63e93470d46c2a2` |
+| `public/scripts/openai.js` | `bab82eec57e0927b809b0571534e96f1b13360e1` |
+
+```sh
+SILLY_SOURCE_DIR=/path/to/official-source npm test
+```
+
+검증의 한계: 전체 Silly 서버/프롬프트 관리자/토큰 예산/제공자별 서버 변환을 실행한 종단 검사는 아니다. 매크로 치환, 도구, 다른 확장의 요청 변경은 모의 처리했다. 외부 모델 호출·사용자 설치본·실제 기기·모든 Silly 버전을 검증하지 않았다. 여기서 full/express는 요청 JSON 설정과 주입문 보존 검사이며 인증 성공을 의미하지 않는다.
+
 # 0.2.2 친밀 탭 중복 표시 수정
 
 별도 전체 기록 패널을 기존 NSFW 상태 폼 위에 추가해 장소·인물·전개·후보가 중복됐던 구성을 정리했다. 기본 위치 필드와 편집 가능한 인물 카드를 한 벌만 사용하며, 시간·환경·사물과 대화 흐름은 기존 폼의 해당 순서에 보강한다. 접촉은 같은 인물 카드에 표시한다. 보고서에 외형과 복장 상세가 다르면 둘 다 같은 카드 안에 보존한다.
@@ -14,9 +47,9 @@ NSFW 보고서의 `scene`에 기존 SFW 파서로 검증한 전체 장면 정보
 
 검증: 배포 대상 자동 검사 34개 통과. 모의 Silly 브라우저에서 320/390/768/844/1280px 너비로 기존 두 보고서 경로 및 SFW 기능을 끈 NSFW 단독 보고서 경로를 확인했다. 사물·인물 카드, 실제 주입, 미검증 표시/주입 차단, NSFW 재분석, 휴지 숨김을 확인했다. 외부 모델·실제 기기 검증은 수행하지 않았다.
 
-## 이전 검수의 정정 및 남아 있는 사항
+## 이전 검수의 정정 및 후속 복구
 
-0.2.0의 “추가 기능 누락을 발견하지 못했다”는 결론 뒤 재검수에서 주입 예외 보호 처리와 일부 상세 진단 이벤트(`cache_invalidated`, `collection_settled`, `chat_changed`) 누락을 확인했다. 아래 0.2.0 기록은 당시 검수 범위이며 완전한 기능 동등성 보장이 아니다. 0.2.1은 친밀 정보 수집·표시를 수정한 릴리스로, 이 별도 누락 사항을 복구했다고 주장하지 않는다.
+0.2.0의 “추가 기능 누락을 발견하지 못했다”는 결론 뒤 재검수에서 주입 예외 보호 처리와 일부 상세 진단 이벤트(`cache_invalidated`, `collection_settled`, `chat_changed`) 누락을 확인했다. 아래 0.2.0 기록은 당시 검수 범위이며 완전한 기능 동등성 보장이 아니다. 0.2.1은 친밀 정보 수집·표시를 수정한 릴리스로, 이 별도 누락 사항을 복구했다고 주장하지 않는다. 해당 예외 보호 및 세 진단 이벤트는 0.2.3에서 복구하고 행동 테스트로 확인했다.
 
 # 0.2.0 단일 코어·기능 검수
 
