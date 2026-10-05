@@ -17,7 +17,9 @@ for (const kind of ['sfw', 'nsfw']) {
         const defaults = source => source.match(/const DEFAULT_SETTINGS = Object\.freeze\(\{[\s\S]*?\n\}\);/)[0];
         assert.equal(defaults(adapted), defaults(original));
         assert.equal(read(`engines/${kind}/settings.html`), read(`vendor/${kind}/settings.html`));
-        assert.equal(read(`engines/${kind}/style.css`), read(`vendor/${kind}/style.css`));
+        // Theme adaptation may replace accent colors, but no layout rule is lost.
+        const withoutAccents = css => css.replace(/var\(--SmartThemeQuoteColor, currentColor\)|crimson|royalblue|#f4a261|\bred\b/g, 'THEME_ACCENT');
+        assert.equal(withoutAccents(read(`engines/${kind}/style.css`)), withoutAccents(read(`vendor/${kind}/style.css`)));
         const fields = source => source.match(/function sanitizeState\(raw\) \{[\s\S]*?\n\}/)[0];
         assert.equal(fields(adapted), fields(original));
     });

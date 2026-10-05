@@ -122,4 +122,10 @@ return { activateRuntime: () => { runtimeActive = true; }, onActivate, onEnable,
     dest = ROOT / 'engines' / kind
     (dest / 'index.js').write_text(header + source + footer)
     for filename in ('settings.html', 'style.css', 'scene-detector.js'):
-        (dest / filename).write_bytes((ROOT / 'vendor' / kind / filename).read_bytes())
+        data = (ROOT / 'vendor' / kind / filename).read_text()
+        if filename == 'style.css':
+            # Keep original layout/semantics, tint all engine chips and cards
+            # using the user's live Silly theme instead of fixed accent colors.
+            for color in ('crimson', 'royalblue', '#f4a261', 'red'):
+                data = data.replace(f'in srgb, {color} ', 'in srgb, var(--SmartThemeQuoteColor, currentColor) ')
+        (dest / filename).write_text(data)

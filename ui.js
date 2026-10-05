@@ -13,24 +13,29 @@ export function createUi(getRuntime) {
         if (document.getElementById('ttu-wand-button')) return;
         const menu = document.getElementById('extensionsMenu');
         if (!menu) return;
-        const button = el('button', '또또(N)SFW · 장면 관리', 'list-group-item flex-container flexGap5 interactable');
-        button.id = 'ttu-wand-button'; button.type = 'button';
+        const button = el('div', undefined, 'list-group-item flex-container flexGap5 interactable');
+        button.id = 'ttu-wand-button'; button.tabIndex = 0; button.setAttribute('role', 'button');
+        const icon = el('span', undefined, 'extensionsMenuExtensionButton fa-solid fa-layer-group');
+        icon.setAttribute('aria-hidden', 'true');
+        button.append(icon, el('span', '또또(N)SFW'));
+        button.addEventListener('keydown', event => {
+            if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); button.click(); }
+        });
         button.addEventListener('click', () => { menu.style.display = 'none'; open(); });
         menu.append(button);
     }
     function build() {
         if (overlay) return;
-        overlay = el('div', undefined, 'ttu-overlay'); overlay.id = 'ttu-overlay'; overlay.hidden = true;
-        const dialog = el('section', undefined, 'ttu-dialog');
-        dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true');
-        dialog.setAttribute('aria-labelledby', 'ttu-title');
-        const header = el('header', undefined, 'ttu-header');
+        overlay = el('dialog', undefined, 'ttu-overlay'); overlay.id = 'ttu-overlay'; overlay.hidden = true;
+        overlay.setAttribute('aria-labelledby', 'ttu-title');
+        const dialog = el('div', undefined, 'ttu-dialog');
+        const header = el('div', undefined, 'ttu-header');
         const titles = el('div'); const title = el('strong', '또또(N)SFW'); title.id = 'ttu-title';
         status = el('small', '장면 관리', 'ttu-status'); titles.append(title, status);
         const closeButton = el('button', '✕', 'menu_button'); closeButton.type = 'button';
         closeButton.setAttribute('aria-label', '닫기'); closeButton.addEventListener('click', close);
         header.append(titles, closeButton);
-        const nav = el('nav', undefined, 'ttu-tabs'); nav.setAttribute('aria-label', '장면 관리 화면');
+        const nav = el('div', undefined, 'ttu-tabs'); nav.setAttribute('role', 'group'); nav.setAttribute('aria-label', '장면 관리 화면');
         for (const [key, name] of [['overview', '전체 상태'], ['sfw', '일반 장면'], ['nsfw', '친밀 장면']]) {
             const button = el('button', name, 'menu_button'); button.type = 'button'; button.dataset.ttuView = key;
             button.addEventListener('click', () => { selected = key; refresh(); }); nav.append(button);
@@ -39,6 +44,7 @@ export function createUi(getRuntime) {
         overview = el('section'); overview.id = 'ttu-overview'; body.append(overview);
         dialog.append(header, nav, body); overlay.append(dialog); document.body.append(overlay);
         overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
+        overlay.addEventListener('cancel', event => { event.preventDefault(); close(); });
         overlay.addEventListener('keydown', event => {
             if (event.key === 'Escape') { event.stopPropagation(); close(); }
             if (event.key === 'Tab') {
@@ -119,15 +125,30 @@ export function createUi(getRuntime) {
     }
     function open(kind = 'overview') {
         selected = kind; build(); lastFocus = document.activeElement; overlay.hidden = false;
-        refresh(); overlay.querySelector('button')?.focus();
+        syncViewport();
+        if (!overlay.open) overlay.showModal();
+        window.visualViewport?.addEventListener('resize', syncViewport);
+        window.visualViewport?.addEventListener('scroll', syncViewport);
+        window.addEventListener('resize', syncViewport);
+        refresh(); overlay.querySelector('button')?.focus({ preventScroll: true });
+    }
+    function syncViewport() {
+        const viewport = window.visualViewport;
+        for (const [name, value] of Object.entries({ top: viewport?.offsetTop ?? 0, left: viewport?.offsetLeft ?? 0,
+            width: viewport?.width ?? window.innerWidth, height: viewport?.height ?? window.innerHeight })) {
+            overlay.style.setProperty(`--ttu-viewport-${name}`, `${value}px`);
+        }
     }
     function close() {
-        if (overlay) overlay.hidden = true;
+        window.visualViewport?.removeEventListener('resize', syncViewport);
+        window.visualViewport?.removeEventListener('scroll', syncViewport);
+        window.removeEventListener('resize', syncViewport);
+        if (overlay) { if (overlay.open) overlay.close(); overlay.hidden = true; }
         for (const kind of ['sfw', 'nsfw']) {
             const panel = document.getElementById(`ttotto-${kind}-settings`);
             if (panel) panel.hidden = true;
         }
-        lastFocus?.focus?.();
+        if (lastFocus?.getClientRects().length) lastFocus.focus({ preventScroll: true });
     }
     function dispose() { close(); document.getElementById('ttu-wand-button')?.remove(); }
     return { ensureButton, refresh, open, close, dispose };

@@ -90,8 +90,8 @@
     margin: 8px 0;
     padding: 8px 10px;
     border-radius: 8px;
-    border: 1px solid color-mix(in srgb, red 45%, transparent);
-    background: color-mix(in srgb, red 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, currentColor) 45%, transparent);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, currentColor) 12%, transparent);
     font-size: 0.85em;
 }
 
@@ -257,8 +257,8 @@
 }
 
 .ttotto-nsfw-settings .tns-heat.is-hot {
-    background: color-mix(in srgb, crimson 22%, transparent);
-    border: 1px solid color-mix(in srgb, crimson 45%, transparent);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, currentColor) 22%, transparent);
+    border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, currentColor) 45%, transparent);
 }
 
 .ttotto-nsfw-settings .tns-act-chip {
@@ -268,8 +268,8 @@
     padding: 3px 8px;
     border-radius: 999px;
     font-size: 0.82em;
-    background: color-mix(in srgb, crimson 18%, transparent);
-    border: 1px solid color-mix(in srgb, crimson 40%, transparent);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, currentColor) 18%, transparent);
+    border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, currentColor) 40%, transparent);
     max-width: 100%;
     white-space: normal;
     overflow-wrap: anywhere;
@@ -291,13 +291,13 @@
 }
 
 .ttotto-nsfw-settings .tns-act-chip.tns-next-chip {
-    background: color-mix(in srgb, royalblue 16%, transparent);
-    border: 1px solid color-mix(in srgb, royalblue 38%, transparent);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, currentColor) 16%, transparent);
+    border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, currentColor) 38%, transparent);
 }
 
 .ttotto-nsfw-settings .tns-act-chip.tns-custom-chip {
     background: transparent;
-    border: 1px dashed color-mix(in srgb, crimson 55%, transparent);
+    border: 1px dashed color-mix(in srgb, var(--SmartThemeQuoteColor, currentColor) 55%, transparent);
 }
 
 .ttotto-nsfw-settings .tns-act-chip.tns-hit-chip {
@@ -332,8 +332,8 @@
     gap: 7px;
     padding: 9px;
     border-radius: 8px;
-    background: color-mix(in srgb, #f4a261 5%, transparent);
-    border: 1px solid color-mix(in srgb, #f4a261 18%, transparent);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, currentColor) 5%, transparent);
+    border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, currentColor) 18%, transparent);
 }
 
 .ttotto-nsfw-settings .tns-slow-burn-card[hidden] {
@@ -353,8 +353,8 @@
     gap: 6px;
     padding: 8px;
     border-radius: 7px;
-    background: color-mix(in srgb, #f4a261 4%, transparent);
-    border: 1px solid color-mix(in srgb, #f4a261 16%, transparent);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, currentColor) 4%, transparent);
+    border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, currentColor) 16%, transparent);
 }
 
 .ttotto-nsfw-settings .tns-slow-burn-target-box > small {
@@ -382,8 +382,8 @@
 }
 
 .ttotto-nsfw-settings .tns-slow-burn-target-box.is-active {
-    border-color: color-mix(in srgb, #f4a261 34%, transparent);
-    box-shadow: 0 0 0 1px color-mix(in srgb, #f4a261 8%, transparent) inset;
+    border-color: color-mix(in srgb, var(--SmartThemeQuoteColor, currentColor) 34%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--SmartThemeQuoteColor, currentColor) 8%, transparent) inset;
 }
 
 .ttotto-nsfw-settings .tns-slow-burn-head {
