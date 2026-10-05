@@ -1,5 +1,6 @@
-import { createEngine as createSfw } from './engines/sfw/index.js';
-import { createEngine as createNsfw } from './engines/nsfw/index.js';
+import { createModeFeatures as createSfw } from './modes/sfw/index.js';
+import { createSceneCore, SCENE_STORE_KEY } from './core.js';
+import { createModeFeatures as createNsfw } from './modes/nsfw/index.js';
 
 export const SETTINGS_KEY = 'ttotto-unified';
 export const META_KEY = 'ttottoUnified';
@@ -23,12 +24,10 @@ export function migratedContainer(parent, key, oldKeys, changed = () => {}) {
 }
 
 export function createRuntime(getContext, { onUi = () => {}, open = () => {}, notify = globalThis.toastr } = {}) {
-    let active = false, pollTimer = null, uiQueued = false, capturing = false;
+    let active = false, pollTimer = null, uiQueued = false;
     let owner = null, transitionTimer = null;
-    let promptBatchDepth = 0, promptDirty = false;
-    const upstream = new Map(), listeners = new Map(), promptSlots = new Map();
+    const upstream = new Map();
     const metadataViews = new WeakMap(), settingsViews = new WeakMap();
-    const shared = {};
     const settings = () => migratedContainer(getContext().extensionSettings, SETTINGS_KEY,
         { sfw: 'ttotto-sfw', nsfw: 'ttotto-nsfw' }, () => getContext().saveSettingsDebounced?.());
     function chatReady() {
@@ -62,54 +61,33 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
     function uiChanged() {
         if (!active || uiQueued) return;
         uiQueued = true;
-        queueMicrotask(() => { uiQueued = false; if (active) { updateOwner(); onUi(); } });
+        queueMicrotask(() => {
+            try {
+                if (active) {
+                    updateOwner();
+                    for (const feature of Object.values(features)) feature.updateUi();
+                    onUi();
+                }
+            } finally { uiQueued = false; }
+        });
     }
-    function publishPrompt() {
-        if (promptBatchDepth) { promptDirty = true; return; }
-        promptDirty = false;
-        const context = getContext();
-        let prompt = chatReady() ? kinds.map(kind => promptSlots.get(kind) || '').filter(Boolean).join('\n\n') : '';
-        if (prompt.includes('<scene_state>') && prompt.includes('<sfw_scene>')) prompt += '\n\n[Unified report coordination]\nBoth report types are requested: output exactly one scene_state block and exactly one sfw_scene block. A one-report instruction applies separately to each tag type. Report bookkeeping must not change the story. Sexual heat/stage and narrative intensity/stage are independent; never substitute one for the other.';
-        context.setExtensionPrompt(PROMPT_KEY, prompt, 1, 0, false, 0);
+    function publishPrompt(prompt = '') {
+        getContext().setExtensionPrompt(PROMPT_KEY, chatReady() ? prompt : '', 1, 0, false, 0);
     }
-    // Each host operation publishes only its completed composition. Consumers
-    // must never observe a new NSFW directive mixed with a stale SFW directive.
-    function finishPromptBatch() {
-        promptBatchDepth--;
-        if (!promptBatchDepth && promptDirty) publishPrompt();
+    function subscribe() {
+        const context = getContext(), types = context.eventTypes ?? context.event_types ?? {};
+        for (const name of ['GENERATION_STARTED', 'MESSAGE_RECEIVED', 'GENERATION_ENDED', 'GENERATION_STOPPED', 'CHARACTER_MESSAGE_RENDERED', 'MESSAGE_SWIPED', 'MESSAGE_EDITED', 'MESSAGE_DELETED', 'CHAT_CHANGED', 'CHAT_CREATED', 'CONNECTION_PROFILE_LOADED']) {
+            if (!types[name] || upstream.has(types[name])) continue;
+            const handler = (...args) => dispatch(types[name], ...args);
+            context.eventSource.on(types[name], handler);
+            upstream.set(types[name], { source: context.eventSource, handler });
+        }
     }
-    function batchPromptChanges(action) {
-        promptBatchDepth++;
-        try { return action(); } finally { finishPromptBatch(); }
-    }
-    function ensureSubscription(event) {
-        if (!active || upstream.has(event)) return;
-        const source = getContext().eventSource;
-        const handler = (...args) => dispatch(event, ...args);
-        source.on(event, handler);
-        upstream.set(event, { source, handler });
-    }
-    function bus(kind) {
-        return {
-            on(event, handler) {
-                if (!listeners.has(event)) listeners.set(event, new Map());
-                if (!listeners.get(event).has(kind)) listeners.get(event).set(kind, new Set());
-                listeners.get(event).get(kind).add(handler);
-                ensureSubscription(event);
-            },
-            removeListener(event, handler) { listeners.get(event)?.get(kind)?.delete(handler); },
-            off(event, handler) { this.removeListener(event, handler); },
-        };
-    }
-    const buses = Object.fromEntries(kinds.map(kind => [kind, bus(kind)]));
     function context(kind) {
         const raw = getContext();
         return new Proxy(raw, {
             get(target, name) {
-                if (name === 'eventSource') return buses[kind];
-                if (name === 'setExtensionPrompt') return (_key, value) => {
-                    promptSlots.set(kind, value); publishPrompt();
-                };
+                if (name === 'setExtensionPrompt') return () => { throw new Error('Only the scene core may publish a prompt'); };
                 if (name === 'extensionSettings') return view(target.extensionSettings, SETTINGS_KEY,
                     { sfw: 'ttotto-sfw', nsfw: 'ttotto-nsfw' }, settingsViews, () => raw.saveSettingsDebounced?.());
                 if (name === 'chatMetadata' && !chatReady()) return null;
@@ -119,49 +97,27 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
             },
         });
     }
-    function migrateMessage(message, kind) {
-        if (!message?.extra || message.is_user || message.is_system) return;
-        const extra = message.extra;
-        if (extra.ttottoUnifiedImported?.[kind]) return;
-        if (!extra[extraKey[kind]] && extra[legacy[kind]]) extra[extraKey[kind]] = structuredClone(extra[legacy[kind]]);
-        (extra.ttottoUnifiedImported ??= {})[kind] = true;
-    }
-    function capture(message) {
-        if (!chatReady() || capturing) return;
-        capturing = true;
-        try {
-            // Save both native schemas before any report stripping. Do not map
-            // narrative intensity/stage to sexual heat/stage.
-            let changed = false;
-            for (const kind of kinds) changed = engines[kind].capturePassive(message) || changed;
-            if (changed) engines.sfw.persistChat();
-        } finally { capturing = false; }
-    }
+    function capture(message) { return core.collect(message); }
     const transitionText = /장면 온도 .*연속성 개입|장면 온도 .*개입을 해제|NSFW 신호 감지|현재 성적 행동이 끝난|NSFW 장면을 감지해 또또SFW|장면이 잦아들어 또또SFW/;
     const toasts = Object.fromEntries(['info', 'success', 'warning', 'error'].map(level => [level, (...args) => {
         if (level === 'info' && transitionText.test(String(args[0]))) { uiChanged(); return; }
         return notify?.[level]?.(...args);
     }]));
-    const host = { shared, context, chatReady, migrateMessage, capture, toasts, uiChanged, open,
-        nsfwCanDrain: () => {
-            const config = engines.nsfw.getSettings();
-            return config.enabled && config.adultConfirmed && config.exitBridge;
-        },
-        allowSharedHints: () => engines.nsfw.allowSharedHints(),
-        filterSharedHints: beats => engines.nsfw.filterSharedHints(beats),
-        companionPrompt: () => chatReady() && engines.nsfw.summary().armed && engines.sfw.getSettings().enabled && engines.sfw.getChatMeta(false)?.enabled ? engines.sfw.handoffReport() : '',
-        anyEnabled: () => kinds.some(kind => engines[kind].getSettings().enabled) };
-    const engines = { nsfw: createNsfw(host), sfw: createSfw(host) };
-    function latestAssistant() {
-        return getContext().chat?.filter(message => message && !message.is_user && !message.is_system).at(-1);
-    }
-    function ownerNow() {
-        if (!active) return 'off';
-        if (!chatReady()) return 'waiting';
-        if (engines.nsfw.summary().armed) return 'nsfw';
-        if (engines.sfw.summary().armed) return 'sfw';
-        return 'waiting';
-    }
+    const host = { context, chatReady, capture, toasts, uiChanged, open,
+        messageStore: (...args) => core.messageStore(...args),
+        clearRecords: (...args) => core.clearRecords(...args),
+        isMode: kind => core.isMode(kind), collect: index => core.collect(index),
+        prepare: (...args) => core.prepare(...args), invalidatePrompt: () => uiChanged(),
+        holdsRewrite: () => core.holdsRewrite(), canRefine: (...args) => core.canRefine(...args),
+        classifying: () => core.classifying(), acceptHeat: (...args) => core.acceptHeat(...args),
+        preview: kind => core.owner() === kind ? core.compose() : '',
+        commonState: () => core.commonSummary().state,
+        allowSharedHints: () => features.nsfw.allowSharedHints(),
+        filterSharedHints: beats => features.nsfw.filterSharedHints(beats),
+        anyEnabled: () => kinds.some(kind => features[kind].getSettings().enabled) };
+    const features = { nsfw: createNsfw(host), sfw: createSfw(host) };
+    const core = createSceneCore({ raw: getContext, ready: chatReady, publish: publishPrompt, changed: uiChanged }, features);
+    function ownerNow() { return active ? core.owner() : 'off'; }
     function updateOwner() {
         const next = ownerNow();
         if (next === owner) return;
@@ -172,49 +128,31 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         }, 200);
     }
     function dispatch(event, ...args) {
-        return batchPromptChanges(() => dispatchEvent(event, ...args));
-    }
-    function dispatchEvent(event, ...args) {
         if (!active) return;
         const types = getContext().eventTypes ?? getContext().event_types ?? {};
-        if (event === types.CHAT_CHANGED) { owner = null; clearTimeout(transitionTimer); promptSlots.clear(); publishPrompt(); }
-        if (!chatReady() && event !== types.CHAT_CHANGED && event !== types.CONNECTION_PROFILE_LOADED) return;
-        if (event === types.MESSAGE_RECEIVED) {
-            // Both generation guards must be released before passive capture.
-            for (const kind of kinds) engines[kind].finishReceivedGeneration();
-            capture(getContext().chat?.[Number(args[0])] ?? latestAssistant());
-        }
-        for (const kind of kinds) for (const handler of listeners.get(event)?.get(kind) ?? []) {
-            try { handler(...args); } catch (error) { console.error('[또또(N)SFW] 이벤트 처리 실패', kind, error); }
-        }
+        const name = Object.keys(types).find(key => types[key] === event);
+        if (name === 'CHAT_CHANGED') { owner = null; clearTimeout(transitionTimer); }
+        core.event(name, ...args);
         uiChanged();
     }
     function poll() {
-        return batchPromptChanges(pollEngines);
-    }
-    function pollEngines() {
         if (!active) return;
-        if (!chatReady()) {
-            owner = null; clearTimeout(transitionTimer); promptSlots.clear(); publishPrompt(); onUi(); return;
-        }
-        for (const kind of kinds) engines[kind].getChatMeta();
-        capture(latestAssistant());
-        for (const kind of kinds) engines[kind].observeLatestMessage();
-        uiChanged();
+        if (!chatReady()) { owner = null; clearTimeout(transitionTimer); }
+        core.refresh();
+        if (ownerNow() !== owner) uiChanged();
     }
     async function start({ withUi = true } = {}) {
         if (active) return;
         active = true;
         settings();
         for (const kind of kinds) {
-            engines[kind].getSettings(); engines[kind].getChatMeta();
-            // After disable, restore the engine runtime without launching an
-            // independent boot lifecycle or independent observer.
-            engines[kind].activateRuntime();
-            if (withUi) await engines[kind].initialize();
-            else engines[kind].registerEvents();
+            features[kind].getSettings(); features[kind].getChatMeta();
+            // Feature libraries have no independent lifecycle or event subscription.
+            features[kind].activateRuntime();
+            if (withUi) await features[kind].initialize();
             if (!active) return;
         }
+        subscribe();
         poll();
         pollTimer = setInterval(poll, 800);
         uiChanged();
@@ -224,23 +162,19 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         clearInterval(pollTimer); pollTimer = null;
         clearTimeout(transitionTimer);
         // Reverse order unwinds the two opt-in diagnostic observers safely.
-        engines.sfw.onDisable(); engines.nsfw.onDisable();
+        features.sfw.onDisable(); features.nsfw.onDisable();
         for (const [event, { source, handler }] of upstream) {
             if (source.removeListener) source.removeListener(event, handler);
             else source.off?.(event, handler);
         }
-        upstream.clear(); listeners.clear(); promptSlots.clear();
+        upstream.clear();
+        core.reset();
         owner = null;
         publishPrompt();
     }
-    async function intercept(chat, size, abort, type) {
-        if (!chatReady()) { promptSlots.clear(); publishPrompt(); return; }
-        promptBatchDepth++;
-        try {
-            await shared.ttottoNsfwGenerationInterceptor(chat, size, abort, type);
-            await shared.ttottoSfwGenerationInterceptor(chat, size, abort, type);
-            updateOwner();
-        } finally { finishPromptBatch(); }
+    async function intercept(_chat, _size, _abort, type) {
+        core.prepare(type, true);
+        updateOwner();
     }
     function clean() {
         stop();
@@ -248,13 +182,14 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         delete getContext().extensionSettings[SETTINGS_KEY];
         if (getContext().chatMetadata) delete getContext().chatMetadata[META_KEY];
         for (const message of getContext().chat ?? []) if (message?.extra) {
+            delete message.extra[SCENE_STORE_KEY];
             for (const kind of kinds) delete message.extra[extraKey[kind]];
         }
         getContext().saveSettingsDebounced?.(); getContext().saveMetadataDebounced?.();
-        engines.sfw.persistChat();
+        features.sfw.persistChat();
     }
-    return { engines, shared, settings, context, capture, dispatch, poll, start, stop, clean,
+    return { features, core, settings, context, capture, dispatch, poll, start, stop, clean,
         intercept, chatReady, owner: ownerNow, get active() { return active; },
-        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.1.9', owner: ownerNow(),
-            sfw: JSON.parse(engines.sfw.diagnosticReport()), nsfw: JSON.parse(engines.nsfw.diagnosticReport()) }) };
+        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.2.0', owner: ownerNow(), core: core.diagnostics(),
+            sfw: JSON.parse(features.sfw.diagnosticReport()), nsfw: JSON.parse(features.nsfw.diagnosticReport()) }) };
 }

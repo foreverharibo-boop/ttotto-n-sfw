@@ -131,7 +131,7 @@ export function createUi(getRuntime) {
         const active = ready && runtime.owner() === 'nsfw';
         sharedStatePanel.hidden = !active;
         if (!active) { sharedStatePanel.replaceChildren(); sharedStateKey = undefined; return; }
-        const snapshot = ready ? runtime.engines.sfw.summary() : null;
+        const snapshot = ready ? runtime.core.commonSummary() : null;
         const state = snapshot?.valid ? snapshot.state : null;
         const key = JSON.stringify([ready, Boolean(snapshot?.state), state]);
         if (key === sharedStateKey) return;

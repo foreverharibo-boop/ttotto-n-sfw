@@ -29,8 +29,8 @@ test('all report fields survive dual capture, native tag stripping, and separate
         r.context.chat.push({ mes: 'A quiet exchange.' + tags(), is_user: false });
         r.source.emit('MESSAGE_RECEIVED', 0);
         const message = r.context.chat[0];
-        const s = message.extra.ttottoUnifiedSfw.swipes['0'].state;
-        const n = message.extra.ttottoUnifiedNsfw.swipes['0'].state;
+        const s = message.extra.ttottoUnifiedScene.modes.sfw.swipes['0'].state;
+        const n = message.extra.ttottoUnifiedScene.modes.nsfw.swipes['0'].state;
         assert.equal(s.characters.A.condition.ko, '피곤함'); assert.equal(s.characters.A.holding.ko, '컵');
         assert.equal(n.characters.A.contact.ko, '손'); assert.equal(n.characters.A.clothing.ko, '코트');
         assert.equal(s.time.ko, '아침'); assert.equal(s.environment.ko, '비'); assert.equal(s.importantObjects.key.ko, '책상');
@@ -39,8 +39,8 @@ test('all report fields survive dual capture, native tag stripping, and separate
         assert.equal(s.next[0].ko, '계획'); assert.equal(n.next[0].ko, '듣기');
         assert.equal(message.mes, 'A quiet exchange.');
         assert.equal(r.runtime.owner(), 'nsfw');
-        assert.equal(r.runtime.engines.sfw.summary().valid, true);
-        assert.equal(r.runtime.engines.nsfw.summary().valid, true);
+        assert.equal(r.runtime.features.sfw.summary().valid, true);
+        assert.equal(r.runtime.features.nsfw.summary().valid, true);
     } finally { r.runtime.stop(); }
 });
 
@@ -50,11 +50,11 @@ test('body edits invalidate records without treating unknown heat as scene end; 
         r.context.chat.push({ mes: 'A quiet exchange with details.' + tags() }); r.source.emit('MESSAGE_RECEIVED', 0);
         r.context.chat[0].mes = 'A quiet exchange.'; r.source.emit('MESSAGE_EDITED', 0); r.runtime.poll();
         assert.equal(r.runtime.owner(), 'nsfw');
-        assert.equal(r.runtime.engines.sfw.summary().valid, false);
-        assert.equal(r.runtime.engines.nsfw.summary().valid, false);
+        assert.equal(r.runtime.features.sfw.summary().valid, false);
+        assert.equal(r.runtime.features.nsfw.summary().valid, false);
         r.context.chat.push({ mes: 'Next reply.' + tags(1) }); r.source.emit('MESSAGE_RECEIVED', 1);
         assert.equal(r.runtime.owner(), 'sfw');
-        assert.equal(r.runtime.engines.sfw.summary().valid, true);
+        assert.equal(r.runtime.features.sfw.summary().valid, true);
         assert.deepEqual(r.toasts, []);
     } finally { r.runtime.stop(); }
 });
@@ -70,9 +70,9 @@ test('settings, chat metadata and all swipes migrate by value; old records stay 
     try {
         assert.equal(r.runtime.settings().engines.sfw.futureField.keep, 42);
         assert.equal(r.context.chatMetadata[META_KEY].engines.sfw.unknown, 99);
-        assert.deepEqual(message.extra.ttottoUnifiedSfw.swipes, beforeExtra.swipes);
+        assert.deepEqual(message.extra.ttottoUnifiedScene.modes.sfw.swipes, beforeExtra.swipes);
         r.runtime.settings().engines.sfw.futureField.keep = 5;
-        message.extra.ttottoUnifiedSfw.swipes[1].state.location = 'Changed';
+        message.extra.ttottoUnifiedScene.modes.sfw.swipes[1].state.location = 'Changed';
         assert.deepEqual(r.context.extensionSettings['ttotto-sfw'], beforeSettings);
         assert.deepEqual(r.context.chatMetadata.ttottoSfw, beforeMeta);
         assert.deepEqual(message.extra.ttottoSfw, beforeExtra);
@@ -107,12 +107,12 @@ test('swipe selection and chat change cannot reuse another current report', asyn
         const message = { mes: 'First.' + tags(), swipe_id: 0, swipes: ['First.' + tags(), 'Unreported alternative.'] };
         r.context.chat.push(message); r.source.emit('MESSAGE_RECEIVED', 0);
         message.swipe_id = 1; message.mes = message.swipes[1]; r.source.emit('MESSAGE_SWIPED', 0);
-        assert.equal(r.runtime.engines.sfw.summary().valid, false);
-        assert.equal(r.runtime.engines.nsfw.summary().valid, false);
-        assert.ok(message.extra.ttottoUnifiedSfw.swipes[0]); assert.equal(message.extra.ttottoUnifiedSfw.swipes[1], undefined);
+        assert.equal(r.runtime.features.sfw.summary().valid, false);
+        assert.equal(r.runtime.features.nsfw.summary().valid, false);
+        assert.ok(message.extra.ttottoUnifiedScene.modes.sfw.swipes[0]); assert.equal(message.extra.ttottoUnifiedScene.modes.sfw.swipes[1], undefined);
         r.context.chat = []; r.context.chatMetadata = {}; r.source.emit('CHAT_CHANGED');
-        assert.equal(r.runtime.engines.sfw.summary().state, null);
-        assert.equal(r.runtime.engines.nsfw.summary().state, null);
+        assert.equal(r.runtime.features.sfw.summary().state, null);
+        assert.equal(r.runtime.features.nsfw.summary().state, null);
     } finally { r.runtime.stop(); }
 });
 
@@ -121,7 +121,7 @@ test('disabled branch does not collect or issue new instructions', async () => {
     try {
         r.runtime.settings().engines.nsfw.enabled = false;
         r.context.chat.push({ mes: 'New reply.' + tags() }); r.source.emit('MESSAGE_RECEIVED', 0);
-        assert.equal(r.context.chat[0].extra.ttottoUnifiedNsfw, undefined);
+        assert.equal(r.context.chat[0].extra.ttottoUnifiedScene.modes.nsfw, undefined);
         await r.runtime.intercept([], 1000, null, 'normal');
         assert.equal(r.runtime.owner(), 'sfw');
         assert.doesNotMatch(r.prompts[PROMPT_KEY], /\[NSFW/);
@@ -152,10 +152,10 @@ test('selected analysis profile survives migration and saves only into unified r
     };
     await r.runtime.start({ withUi: false });
     try {
-        assert.equal(await r.runtime.engines.nsfw.runRefine({ manual: true }), true);
+        assert.equal(await r.runtime.features.nsfw.runRefine({ manual: true }), true);
         assert.equal(calls.length, 1); assert.equal(calls[0].id, 'analysis-profile');
         assert.equal(calls[0].options.stream, false);
-        assert.equal(r.context.chat[0].extra.ttottoUnifiedNsfw.swipes[0].state.heat, 8);
+        assert.equal(r.context.chat[0].extra.ttottoUnifiedScene.modes.nsfw.swipes[0].state.heat, 8);
         assert.equal(r.context.chat[0].extra.ttottoNsfw, undefined);
     } finally { r.runtime.stop(); }
 });
@@ -166,7 +166,7 @@ test('passive SFW collection keeps the exact explicit panel time while NSFW owns
         r.context.chat.push({ mes: '<Info_panel>[Date: Friday | 10:15 AM]</Info_panel>' + tags() });
         r.source.emit('MESSAGE_RECEIVED', 0);
         assert.equal(r.runtime.owner(), 'nsfw');
-        assert.equal(r.runtime.engines.sfw.summary().state.time.en, 'Friday | 10:15 AM');
+        assert.equal(r.runtime.features.sfw.summary().state.time.en, 'Friday | 10:15 AM');
     } finally { r.runtime.stop(); }
 });
 
@@ -226,7 +226,7 @@ test('home screen does not collect, arm, inject or announce; opening a real chat
         r.source.emit('CHAT_CHANGED'); r.runtime.poll();
         await new Promise(resolve => setTimeout(resolve, 230));
         assert.equal(r.runtime.owner(), 'nsfw');
-        assert.ok(r.context.chat[0].extra.ttottoUnifiedNsfw);
+        assert.ok(r.context.chat[0].extra.ttottoUnifiedScene.modes.nsfw);
         assert.deepEqual(r.toasts, []);
         r.context.characterId = undefined; r.context.chatId = undefined;
         r.source.emit('CHAT_CHANGED'); r.runtime.poll();
@@ -252,18 +252,18 @@ test('intimate next-generation prompt contains all collected common data and nat
         assert.match(r.prompts[PROMPT_KEY], /physical contact: Hand/);
         assert.match(r.prompts[PROMPT_KEY], /clothing: Coat/);
         assert.match(r.prompts[PROMPT_KEY], /Listen/);
-        assert.equal(message.extra.ttottoUnifiedSfw.swipes['0'].state.stage, 2);
-        assert.equal(message.extra.ttottoUnifiedNsfw.swipes['0'].state.stage, 4);
-        assert.equal(message.extra.ttottoUnifiedNsfw.swipes['0'].state.heat, 8);
+        assert.equal(message.extra.ttottoUnifiedScene.modes.sfw.swipes['0'].state.stage, 2);
+        assert.equal(message.extra.ttottoUnifiedScene.modes.nsfw.swipes['0'].state.stage, 4);
+        assert.equal(message.extra.ttottoUnifiedScene.modes.nsfw.swipes['0'].state.heat, 8);
         // Disabling scene-transition/dialogue rules must not discard object/body facts.
         settings.transitionGuard = false; settings.dialogueFlow = false;
         await r.runtime.intercept([], 1000, null, 'normal');
         assert.match(shared(), /Important object "key": Desk/); assert.match(shared(), /physical condition: Tired/);
         assert.doesNotMatch(shared(), /SCENE TRANSITION GUARD|DIALOGUE CONTINUITY|Current conversation topic:/);
         // Both engines' controls and bans apply to shared hints.
-        r.runtime.engines.nsfw.getChatMeta().customBans = ['Plan'];
+        r.runtime.features.nsfw.getChatMeta().customBans = ['Plan'];
         await r.runtime.intercept([], 1000, null, 'normal'); assert.doesNotMatch(shared(), /SHARED NEXT POSSIBILITIES/);
-        r.runtime.engines.nsfw.getChatMeta().customBans = [];
+        r.runtime.features.nsfw.getChatMeta().customBans = [];
         settings.nextBeatHints = false; settings.repeatGuard = false; settings.dialogueBeatGuard = false;
         await r.runtime.intercept([], 1000, null, 'normal');
         assert.doesNotMatch(shared(), /SHARED NEXT POSSIBILITIES|SHARED RECENT EVENTS|SHARED RECENT DIALOGUE/);
@@ -292,8 +292,8 @@ test('repeated handoffs publish one complete prompt and preserve both collected 
             r.source.emit('MESSAGE_RECEIVED', r.context.chat.length - 1);
             const expected = heat >= 7 ? 'nsfw' : 'sfw';
             assert.equal(r.runtime.owner(), expected);
-            assert.equal(r.runtime.engines.sfw.summary().armed, expected === 'sfw');
-            assert.equal(r.runtime.engines.nsfw.summary().armed, expected === 'nsfw');
+            assert.equal(r.runtime.features.sfw.summary().armed, expected === 'sfw');
+            assert.equal(r.runtime.features.nsfw.summary().armed, expected === 'nsfw');
             r.writes.length = 0;
             await r.runtime.intercept([], 1000, null, 'normal');
             assert.equal(r.writes.length, 1, 'publish only the complete composition');
@@ -304,8 +304,8 @@ test('repeated handoffs publish one complete prompt and preserve both collected 
             assert.doesNotMatch(prompt, new RegExp(expected === 'nsfw' ? 'GENERAL_BRANCH_LIMIT' : 'INTIMATE_BRANCH_LIMIT'));
             assert.match(prompt, /Important object "key": Desk/);
             assert.match(prompt, /holding\/carrying: Cup/);
-            assert.equal(r.runtime.engines.sfw.summary().valid, true);
-            assert.equal(r.runtime.engines.nsfw.summary().valid, true);
+            assert.equal(r.runtime.features.sfw.summary().valid, true);
+            assert.equal(r.runtime.features.nsfw.summary().valid, true);
             const stable = prompt; r.writes.length = 0;
             await r.runtime.intercept([], 1000, null, 'quiet');
             assert.equal(r.writes.length, 0); assert.equal(r.prompts[PROMPT_KEY], stable);
@@ -323,7 +323,7 @@ test('both active modes retain style, pacing, bans, hints, CardInject and slow-b
             const config = r.runtime.settings().engines[kind];
             Object.assign(config, { globalBans: ['UNIQUE_HARD_LIMIT'], paceMode: 'hold', styleLength: 'long', styleBalance: 'dialogue', cardLinkEnabled: true, cardLinkSelected: { 'a.png': ['preferences'] }, nextBeatHints: true, dialogueBeatGuard: true });
             r.context.chat.push({ mes: 'Current.' + tags(kind === 'nsfw' ? 8 : 1) }); r.source.emit('MESSAGE_RECEIVED', 0);
-            r.runtime.engines[kind].getChatMeta().customBans = ['UNIQUE_CHAT_BAN'];
+            r.runtime.features[kind].getChatMeta().customBans = ['UNIQUE_CHAT_BAN'];
             await r.runtime.intercept([], 1000, null, 'normal');
             const p = r.prompts[PROMPT_KEY];
             for (const text of ['UNIQUE_HARD_LIMIT', 'UNIQUE_CHAT_BAN', 'Length: write a full', 'Balance: dialogue-forward', 'PACING:', 'UNIQUE_CARD_FACT', 'Reader', 'ALREADY HAPPENED', 'DIALOGUE INTENTS ALREADY USED', 'SUGGESTED NEXT BEATS']) assert.ok(p.includes(text), kind + ': ' + text);
@@ -359,7 +359,7 @@ test('chat disable preserves the optional one-shot exit bridge, then hands off t
             r.context.chat.push({ mes: 'Current.' + tags() }); r.source.emit('MESSAGE_RECEIVED', 0);
             assert.equal(r.runtime.owner(), 'nsfw');
             r.runtime.settings().engines.nsfw.exitBridge = exitBridge;
-            const meta = r.runtime.engines.nsfw.getChatMeta();
+            const meta = r.runtime.features.nsfw.getChatMeta();
             // Same metadata transition as the native per-chat toggle.
             Object.assign(meta, { enabled: false, autoArmed: false, forceArmed: false, bridgePending: exitBridge });
             r.runtime.poll();
@@ -378,4 +378,181 @@ test('chat disable preserves the optional one-shot exit bridge, then hands off t
             assert.match(r.prompts[PROMPT_KEY], /Important object "key": Desk/);
         } finally { r.runtime.stop(); }
     }
+});
+
+test('single core runs with all legacy controller entry points disabled and no bridge object', async () => {
+    const r = setup();
+    for (const feature of Object.values(r.runtime.features)) for (const key of ['registerEvents', 'observeLatestMessage', 'prepareSceneInjection', 'handleIncomingMessage', 'beginSceneGeneration', 'finishSceneGeneration', 'finishReceivedGeneration']) {
+        feature[key] = () => { throw new Error(`Legacy controller invoked: ${key}`); };
+    }
+    await r.runtime.start({ withUi: false });
+    try {
+        assert.equal(r.runtime.shared, undefined);
+        for (const heat of [8, 1, 8, 1]) {
+            r.source.emit('GENERATION_STARTED', 'normal');
+            r.context.chat.push({ mes: `Turn ${heat}.` + tags(heat) });
+            r.source.emit('MESSAGE_RECEIVED', r.context.chat.length - 1);
+            r.source.emit('GENERATION_ENDED'); r.runtime.poll();
+            await r.runtime.intercept([], 1000, null, 'normal');
+            assert.equal(r.runtime.owner(), heat === 8 ? 'nsfw' : 'sfw');
+            assert.match(r.prompts[PROMPT_KEY], /Important object "key": Desk/);
+            assert.equal((r.prompts[PROMPT_KEY].match(/\[Scene Continuity Directive\]/g) || []).length, 1);
+        }
+    } finally { r.runtime.stop(); }
+});
+
+test('obsolete cross-engine handoff flags cannot suspend the single core', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        r.context.chat.push({ mes: 'Ordinary reply.' + tags(1) }); r.source.emit('MESSAGE_RECEIVED', 0);
+        Object.assign(r.runtime.features.sfw.getChatMeta(), { nsfwSuspended: true, nsfwResumePending: true, nsfwDelegatedAtAssistantCount: 999999 });
+        r.runtime.poll(); await r.runtime.intercept([], 1000, null, 'normal');
+        assert.equal(r.runtime.owner(), 'sfw');
+        assert.match(r.prompts[PROMPT_KEY], /Important object "key": Desk/);
+        assert.match(r.prompts[PROMPT_KEY], /Plan/);
+        r.context.chat.push({ mes: 'New reply.' + tags(8) }); r.source.emit('MESSAGE_RECEIVED', 1);
+        r.runtime.settings().engines.nsfw.enabled = false;
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.equal(r.runtime.owner(), 'sfw');
+    } finally { r.runtime.stop(); }
+});
+
+test('one generation queue blocks partial reports across nested quiet events', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        r.source.emit('GENERATION_STARTED', 'normal');
+        const message = { mes: 'Partial.' + tags(8) }; r.context.chat.push(message);
+        r.source.emit('GENERATION_STARTED', 'quiet');
+        r.source.emit('CHARACTER_MESSAGE_RENDERED', 0); r.runtime.poll();
+        assert.equal(message.extra?.ttottoUnifiedScene, undefined);
+        r.source.emit('GENERATION_ENDED', 'quiet'); r.runtime.poll();
+        assert.equal(message.extra?.ttottoUnifiedScene, undefined);
+        assert.equal(r.runtime.diagnostics().core.pendingGenerations, 1);
+        message.mes = 'Completed.' + tags(1); r.source.emit('MESSAGE_RECEIVED', 0);
+        assert.equal(r.runtime.owner(), 'sfw');
+        assert.equal(message.extra.ttottoUnifiedScene.modes.nsfw.swipes['0'].state.heat, 1);
+        assert.equal(r.runtime.diagnostics().core.pendingGenerations, 0);
+    } finally { r.runtime.stop(); }
+});
+
+test('swipe and regenerate keep the mode while refusing previous body facts', async () => {
+    for (const type of ['swipe', 'regenerate']) {
+        const r = setup(); await r.runtime.start({ withUi: false });
+        try {
+            r.context.chat.push({ mes: 'Old reply.' + tags(8), swipe_id: 0, swipes: ['Old reply.' + tags(8)] }); r.source.emit('MESSAGE_RECEIVED', 0);
+            r.source.emit('GENERATION_STARTED', type);
+            const next = type === 'swipe' ? r.context.chat[0] : { mes: '...' };
+            if (type === 'swipe') { next.swipe_id = 1; next.mes = '...'; }
+            else r.context.chat.splice(0, 1, next);
+            await r.runtime.intercept([], 1000, null, type);
+            assert.equal(r.runtime.owner(), 'nsfw');
+            assert.doesNotMatch(r.prompts[PROMPT_KEY], /Important object "key": Desk/);
+            next.mes = 'Fresh reply.' + tags(1); r.source.emit('MESSAGE_RECEIVED', 0);
+            assert.equal(r.runtime.owner(), 'sfw');
+            assert.equal(next.extra.ttottoUnifiedScene.modes.nsfw.swipes[String(next.swipe_id || 0)].state.heat, 1);
+        } finally { r.runtime.stop(); }
+    }
+});
+
+test('chat change resets generation state and never carries previous scene facts', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        r.context.chat.push({ mes: 'Old.' + tags(8) }); r.source.emit('MESSAGE_RECEIVED', 0);
+        r.source.emit('GENERATION_STARTED', 'regenerate');
+        r.context.chat = []; r.context.chatMetadata = {}; r.context.chatId = 'new'; r.source.emit('CHAT_CHANGED');
+        assert.equal(r.runtime.owner(), 'sfw');
+        assert.equal(r.runtime.diagnostics().core.pendingGenerations, 0);
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.doesNotMatch(r.prompts[PROMPT_KEY], /Desk|Cup|Tired/);
+        assert.equal(r.runtime.features.sfw.summary().state, null);
+    } finally { r.runtime.stop(); }
+});
+
+test('0.1.x records migrate into one store, survive serialization and never reimport after clear', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        const message = { mes: 'Snapshot.' + tags(8) }; r.context.chat.push(message); r.source.emit('MESSAGE_RECEIVED', 0);
+        const s = structuredClone(message.extra.ttottoUnifiedScene.modes.sfw);
+        const n = structuredClone(message.extra.ttottoUnifiedScene.modes.nsfw);
+        s.swipes['3'] = structuredClone(s.swipes['0']);
+        message.extra = { ttottoUnifiedSfw: s, ttottoUnifiedNsfw: n };
+        assert.equal(r.runtime.features.sfw.summary().valid, true);
+        assert.ok(message.extra.ttottoUnifiedScene.modes.sfw.swipes['3']);
+        assert.equal(r.runtime.features.nsfw.summary().valid, true);
+        message.extra = JSON.parse(JSON.stringify(message.extra));
+        r.runtime.core.clearRecords(message, 'nsfw');
+        assert.equal(r.runtime.features.nsfw.summary().state, null);
+        assert.equal(r.runtime.features.sfw.summary().valid, true);
+        message.extra = JSON.parse(JSON.stringify(message.extra));
+        assert.equal(r.runtime.features.nsfw.summary().state, null);
+        assert.deepEqual(message.extra.ttottoUnifiedSfw, s);
+        assert.deepEqual(message.extra.ttottoUnifiedNsfw, n);
+    } finally { r.runtime.stop(); }
+});
+
+test('late repair cannot restore a mode or records after that mode was disabled', async () => {
+    const r = setup({ chat: [{ mes: 'Current.' + tags(8) }] });
+    let resolve; const response = new Promise(done => { resolve = done; });
+    r.context.extensionSettings['ttotto-nsfw'].refineProfileId = 'profile';
+    r.context.ConnectionManagerRequestService = { sendRequest: () => response };
+    await r.runtime.start({ withUi: false });
+    try {
+        const pending = r.runtime.features.nsfw.runRefine({ manual: true });
+        r.runtime.settings().engines.nsfw.enabled = false; r.runtime.poll();
+        resolve(JSON.stringify({ ...nsfw, location: 'INVALID_LATE_FACT' }));
+        assert.equal(await pending, false);
+        assert.equal(r.runtime.owner(), 'sfw');
+        assert.doesNotMatch(JSON.stringify(r.context.chat[0].extra.ttottoUnifiedScene), /INVALID_LATE_FACT/);
+    } finally { r.runtime.stop(); }
+});
+
+test('exit completion without MESSAGE_RECEIVED cannot leave the core in wind-down', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        r.context.chat.push({ mes: 'First.' + tags(8) }); r.source.emit('MESSAGE_RECEIVED', 0);
+        const meta = r.runtime.features.nsfw.getChatMeta();
+        Object.assign(meta, { enabled: false, autoArmed: false, bridgePending: true });
+        r.source.emit('GENERATION_STARTED', 'normal');
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.match(r.prompts[PROMPT_KEY], /\[Scene Wind-Down\]/);
+        r.context.chat.push({ mes: 'Settled.' + tags(1) });
+        r.source.emit('GENERATION_ENDED', 'normal');
+        assert.equal(r.runtime.owner(), 'sfw');
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.doesNotMatch(r.prompts[PROMPT_KEY], /\[Scene Wind-Down\]/);
+        assert.match(r.prompts[PROMPT_KEY], /Desk/);
+    } finally { r.runtime.stop(); }
+});
+
+test('automatic repair still runs through the selected profile and saves central records', async () => {
+    const r = setup({ autoRefine: true, chat: [{ mes: 'Missing state.' }] });
+    r.context.extensionSettings['ttotto-nsfw'].enabled = false;
+    r.context.extensionSettings['ttotto-sfw'].refineProfileId = 'repair-profile';
+    const calls = [];
+    r.context.ConnectionManagerRequestService = { async sendRequest(id) { calls.push(id); return JSON.stringify(sfw); } };
+    await r.runtime.start({ withUi: false });
+    try {
+        await new Promise(resolve => setTimeout(resolve, 1050));
+        assert.deepEqual(calls, ['repair-profile']);
+        assert.equal(r.runtime.features.sfw.summary().valid, true);
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.match(r.prompts[PROMPT_KEY], /Important object "key": Desk/);
+        assert.ok(r.context.chat[0].extra.ttottoUnifiedScene.modes.sfw.swipes['0']);
+    } finally { r.runtime.stop(); }
+});
+
+test('diagnostics retain receive/body/collection evidence while central state is authoritative', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        for (const kind of ['sfw', 'nsfw']) r.runtime.settings().engines[kind].diagnosticsEnabled = true;
+        r.context.chat.push({ mes: 'Evidence.' + tags(8) }); r.source.emit('MESSAGE_RECEIVED', 0);
+        const report = r.runtime.diagnostics();
+        for (const kind of ['sfw', 'nsfw']) {
+            assert.ok(report[kind].events.some(e => e.stage === 'message_received'));
+            assert.ok(report[kind].events.some(e => e.stage === 'response_observed'));
+            assert.ok(report[kind].events.some(e => e.stage === 'collection_result'));
+        }
+        assert.equal(report.core.mode, 'nsfw');
+        assert.doesNotMatch(JSON.stringify(report), /Evidence\./);
+    } finally { r.runtime.stop(); }
 });

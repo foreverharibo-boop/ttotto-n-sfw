@@ -1,5 +1,5 @@
-@import url('./engines/sfw/style.css');
-@import url('./engines/nsfw/style.css');
+@import url('./modes/sfw/style.css');
+@import url('./modes/nsfw/style.css');
 
 #ttu-overlay[hidden], #ttu-overlay:not([open]), #ttu-body [hidden] { display: none !important; }
 /* The modal top layer escapes transformed chat/body containing blocks. */
