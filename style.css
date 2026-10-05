@@ -63,20 +63,8 @@
     #ttu-overlay .ttu-tabs { padding: 0 10px 10px; gap: 4px; }
 }
 
-#ttu-overlay .tsf-tabs, #ttu-overlay .tns-tabs { display: none !important; }
-#ttu-overlay[data-ttu-page="state"] .tsf-drawer-header,
-#ttu-overlay[data-ttu-page="state"] .tns-drawer-header { display: none !important; }
-#ttu-overlay[data-ttu-page="settings"] .tsf-master-label,
-#ttu-overlay[data-ttu-page="settings"] .tns-master-label { display: flex; }
-#ttu-overlay .ttu-setting-group, #ttu-overlay .ttu-problems { border-top: 1px solid var(--SmartThemeBorderColor, currentColor); padding-top: 12px; margin-top: 16px; }
-#ttu-overlay summary { cursor: pointer; padding: 6px 0; }
-#ttu-overlay .ttu-setting-group > summary, #ttu-overlay .ttu-problems > summary { font-weight: bold; }
-#ttu-overlay .ttu-setting-group > div, #ttu-overlay .ttu-diagnostic-group > div { padding-top: 10px; }
-#ttu-overlay .ttu-problems > .menu_button { width: auto; white-space: normal; color: inherit; }
+#ttu-overlay .ttu-problems { border-top: 1px solid var(--SmartThemeBorderColor, currentColor); padding-top: 12px; margin-top: 16px; }
+#ttu-overlay .ttu-problems > summary { cursor: pointer; padding: 6px 0; font-weight: bold; }
+#ttu-overlay .ttu-problems > section { padding-top: 10px; }
 #ttu-overlay .ttu-problems textarea { max-width: 100%; box-sizing: border-box; }
-#ttu-overlay .ttu-common h3 { font-size: 1em; margin: 0 0 8px; }
-#ttu-overlay .ttu-chat-notice { opacity: .75; }
 #ttu-overlay [inert] { opacity: .55; }
-
-#ttu-overlay .ttu-common { display: grid; gap: 12px; }
-#ttu-overlay .ttu-common .ttu-common-menu { margin-bottom: 0; }

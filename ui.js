@@ -1,9 +1,8 @@
 const ownerLabels = { sfw: '일반 장면 추적 중', nsfw: '친밀 장면 추적 중', waiting: '채팅을 열면 장면을 추적해요', off: '사용 중지' };
 
 export function createUi(getRuntime) {
-    let overlay, status, notificationCheckbox, selected = 'sfw', view = 'state', lastFocus;
-    let body, scenePicker, sceneHome, settingsHome, common, problems, chatNotice;
-    const settingsHomes = {}, diagnosticHomes = {};
+    let overlay, status, notificationCheckbox, selected = 'sfw', lastFocus;
+    const arrangedPanels = new WeakSet();
     const el = (tag, text, cls) => {
         const node = document.createElement(tag);
         if (text !== undefined) node.textContent = text;
@@ -36,41 +35,13 @@ export function createUi(getRuntime) {
         const closeButton = el('button', '✕', 'menu_button'); closeButton.type = 'button';
         closeButton.setAttribute('aria-label', '닫기'); closeButton.addEventListener('click', close);
         header.append(titles, closeButton);
-        const nav = el('div', undefined, 'ttu-tabs'); nav.setAttribute('role', 'group');
-        nav.setAttribute('aria-label', '장면 관리 화면');
-        for (const [key, name] of [['state', '장면 상태'], ['settings', '설정']]) {
-            const button = el('button', name, 'menu_button'); button.type = 'button'; button.dataset.ttuPage = key;
-            button.addEventListener('click', () => { view = key; refresh(); body.scrollTop = 0; }); nav.append(button);
-        }
-        body = el('div', undefined, 'ttu-body'); body.id = 'ttu-body';
-        chatNotice = el('p', '채팅을 연 뒤 장면별 상태와 설정을 사용할 수 있어요.', 'ttu-chat-notice');
-        scenePicker = el('div', undefined, 'ttu-tabs');
-        scenePicker.setAttribute('role', 'group'); scenePicker.setAttribute('aria-label', '장면 선택');
+        const nav = el('div', undefined, 'ttu-tabs'); nav.setAttribute('role', 'group'); nav.setAttribute('aria-label', '장면 관리 화면');
         for (const [key, name] of [['sfw', '일반 장면'], ['nsfw', '친밀 장면']]) {
             const button = el('button', name, 'menu_button'); button.type = 'button'; button.dataset.ttuView = key;
-            button.addEventListener('click', () => { selected = key; refresh(); }); scenePicker.append(button);
+            button.addEventListener('click', () => { selected = key; refresh(); }); nav.append(button);
         }
-        sceneHome = el('div');
-        settingsHome = el('div'); settingsHome.id = 'ttu-settings';
-        common = el('section', undefined, 'ttotto-sfw-settings ttu-common');
-        common.append(el('h3', '공통 설정'));
-        const options = buildCommonMenu();
-        common.append(options);
-        settingsHome.append(common);
-        for (const [kind, title] of [['sfw', '일반 장면 설정'], ['nsfw', '친밀 장면 설정']]) {
-            const group = el('details', undefined, 'ttu-setting-group');
-            group.append(el('summary', title)); settingsHomes[kind] = el('div'); group.append(settingsHomes[kind]);
-            settingsHome.append(group);
-        }
-        problems = el('details', undefined, 'ttu-problems'); problems.id = 'ttu-problems';
-        problems.append(el('summary', '문제 해결'));
-        problems.append(diagnosticDownloadButton());
-        for (const [kind, title] of [['sfw', '일반 장면 진단'], ['nsfw', '친밀 장면 진단']]) {
-            const group = el('details', undefined, `ttotto-${kind}-settings ttu-diagnostic-group`);
-            group.append(el('summary', title)); diagnosticHomes[kind] = el('div'); group.append(diagnosticHomes[kind]); problems.append(group);
-        }
-        settingsHome.append(problems);
-        body.append(chatNotice, scenePicker, sceneHome, settingsHome);
+        const body = el('div', undefined, 'ttu-body'); body.id = 'ttu-body';
+        body.append(buildCommonMenu());
         dialog.append(header, nav, body); overlay.append(dialog); document.body.append(overlay);
         overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
         overlay.addEventListener('cancel', event => { event.preventDefault(); close(); });
@@ -85,7 +56,8 @@ export function createUi(getRuntime) {
         });
     }
     function buildCommonMenu() {
-        const menu = el('div', undefined, 'ttu-common-menu');
+        const menu = el('details', undefined, 'ttu-common-menu');
+        menu.append(el('summary', '공통 메뉴'));
         const options = el('div', undefined, 'ttu-options');
         const label = el('label'); const checkbox = el('input'); checkbox.type = 'checkbox';
         notificationCheckbox = checkbox;
@@ -95,61 +67,52 @@ export function createUi(getRuntime) {
             runtime.context('sfw').saveSettingsDebounced?.();
         });
         label.append(checkbox, document.createTextNode('자동 전환 알림 표시')); options.append(label);
-        menu.append(options);
-        return menu;
-    }
-    function diagnosticDownloadButton() {
         const diagnosticButton = el('button', '양쪽 진단 기록 내려받기', 'menu_button'); diagnosticButton.type = 'button';
         diagnosticButton.addEventListener('click', () => {
             const blob = new Blob([JSON.stringify(getRuntime().diagnostics(), null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob); const anchor = el('a'); anchor.href = url; anchor.download = 'ttotto-unified-diagnostics.json'; anchor.click();
             setTimeout(() => URL.revokeObjectURL(url), 1000);
-        });
-        return diagnosticButton;
-    }
-    function show(node, visible) {
-        if (!node) return;
-        node.hidden = !visible;
-        if (visible) node.style.removeProperty('display');
-        else node.style.setProperty('display', 'none', 'important');
+        }); options.append(diagnosticButton); menu.append(options);
+        return menu;
     }
     function refresh() {
         ensureButton();
         if (!overlay || overlay.hidden) return;
         const runtime = getRuntime(); status.textContent = ownerLabels[runtime.owner()];
-        const ready = runtime.chatReady();
-        show(chatNotice, !ready);
-        show(scenePicker, view === 'state'); show(sceneHome, view === 'state'); show(settingsHome, view === 'settings');
-        for (const button of overlay.querySelectorAll('[data-ttu-page]')) button.setAttribute('aria-pressed', String(button.dataset.ttuPage === view));
         for (const button of overlay.querySelectorAll('[data-ttu-view]')) button.setAttribute('aria-pressed', String(button.dataset.ttuView === selected));
         notificationCheckbox.checked = Boolean(runtime.settings().transitionNotifications);
-        overlay.dataset.ttuPage = view;
         for (const kind of ['sfw', 'nsfw']) {
             const panel = document.getElementById(`ttotto-${kind}-settings`);
             if (!panel) continue;
+            const body = document.getElementById('ttu-body');
+            if (panel.parentElement !== body) body.append(panel);
+            panel.classList.add(kind === 'sfw' ? 'tsf-in-popup' : 'tns-in-popup');
+            panel.hidden = selected !== kind;
+            panel.inert = !runtime.chatReady();
             const prefix = kind === 'sfw' ? 'tsf' : 'tns';
-            const home = view === 'state' ? sceneHome : settingsHomes[kind];
-            if (panel.parentElement !== home) home.append(panel);
-            panel.classList.add(`${prefix}-in-popup`);
-            panel.inert = !ready;
-            show(panel, view === 'settings' || selected === kind);
-            runtime.engines[kind].setTab(view);
             const diagnostic = document.getElementById(`${prefix}-panel-diagnostics`);
-            if (diagnostic && diagnostic.parentElement !== diagnosticHomes[kind]) {
-                diagnosticHomes[kind].append(diagnostic);
+            const settingsPanel = document.getElementById(`${prefix}-panel-settings`);
+            if (!arrangedPanels.has(panel) && diagnostic && settingsPanel) {
+                const problems = el('details', undefined, 'ttu-problems');
+                problems.append(el('summary', '문제 해결'), diagnostic);
+                settingsPanel.append(problems);
                 diagnostic.removeAttribute('role'); diagnostic.removeAttribute('aria-labelledby');
+                const oldTab = document.getElementById(`${prefix}-tab-diagnostics`);
+                if (oldTab) oldTab.hidden = true;
+                // Native engine tab clicks hide diagnostics; keep its content available
+                // inside the folded settings section without changing the chosen tab.
+                panel.addEventListener('click', event => {
+                    if (event.target.closest(`[data-${prefix}-tab]`)) refresh();
+                });
+                arrangedPanels.add(panel);
             }
-            show(diagnostic, true);
-            const content = document.getElementById(`${prefix}-panel-${view}`);
-            content?.removeAttribute('role'); content?.removeAttribute('aria-labelledby');
-        }
-        for (const id of ['tsf-transition-guard', 'tsf-dialogue-flow']) {
-            const field = document.getElementById(id)?.closest('label');
-            if (field && field.parentElement !== common) common.append(field);
+            if (diagnostic) {
+                diagnostic.hidden = false;
+                diagnostic.style.removeProperty('display');
+            }
         }
     }
     function open(kind) {
-        view = 'state';
         const owner = getRuntime().owner();
         selected = ['sfw', 'nsfw'].includes(kind) ? kind : owner === 'nsfw' ? 'nsfw' : 'sfw'; build(); lastFocus = document.activeElement; overlay.hidden = false;
         syncViewport();
