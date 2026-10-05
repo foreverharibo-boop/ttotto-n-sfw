@@ -1,0 +1,20 @@
+{
+  "sfw": {
+    "version": "0.2.42",
+    "sha256": {
+      "index.js": "37ff2a3e1346eaaa2c21845f3b90f42fb03f45eef29c2c5195ad935f6797bef9",
+      "settings.html": "da35b5c04203ea56b934e0fb5179dee0e3b2020b037cd2e00d2ad7bba0f76ca6",
+      "style.css": "27281371737cd81162180689f24ab0be36613f8b2f748011b6e047685652727e",
+      "scene-detector.js": "7001eef3b4c1594a6aa09c12376aa4102f814e0503388102205594a4b5d36354"
+    }
+  },
+  "nsfw": {
+    "version": "0.13.26",
+    "sha256": {
+      "index.js": "7a2a8b95b4539e019042e6215d7e6977cc376e0660f5a1d9703f9b9e4bcd576d",
+      "settings.html": "3ee77c0489f1df3bd20f2f1cacc6e92f5f32b0746cc89fcbc56667fb9f129325",
+      "style.css": "169ad43032f4b193733f6ea28ea4c56b7767ec0a2d0bcaa564f8da93bb1342d4",
+      "scene-detector.js": "7001eef3b4c1594a6aa09c12376aa4102f814e0503388102205594a4b5d36354"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+@import url('./engines/sfw/style.css');
+@import url('./engines/nsfw/style.css');
+
+.ttu-overlay[hidden], #ttu-body [hidden] { display: none !important; }
+.ttu-overlay { position: fixed; inset: 0; z-index: 30000; background: #0008; display: flex; align-items: center; justify-content: center; padding: 12px; box-sizing: border-box; }
+.ttu-dialog { display: flex; flex-direction: column; width: min(760px, 100%); max-height: 94dvh; min-width: 0; border: 1px solid #8886; border-radius: 18px; background: var(--SmartThemeBlurTintColor, #202229); color: var(--SmartThemeBodyColor, #ededf2); box-shadow: 0 20px 64px #0006; overflow: hidden; }
+.ttu-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 20px 12px; }
+.ttu-header strong { font-size: 20px; }
+.ttu-status { display: block; margin-top: 5px; opacity: .75; }
+.ttu-tabs { display: flex; gap: 8px; padding: 0 16px 12px; border-bottom: 1px solid #8884; }
+.ttu-tabs button { flex: 1; white-space: nowrap; }
+.ttu-tabs [aria-pressed="true"] { background: #557979; color: white; border-color: #8bc4be; }
+.ttu-body { overflow-y: auto; overflow-x: hidden; padding: 16px; min-height: 0; overscroll-behavior: contain; }
+.ttu-options { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.ttu-options label { display: flex; gap: 8px; align-items: center; }
+.ttu-muted { opacity: .7; font-size: 13px; line-height: 1.65; }
+.ttu-stale { color: #bd791f; font-size: 13px; }
+.ttu-card { border: 1px solid #8884; border-radius: 12px; padding: 14px; margin-top: 14px; }
+.ttu-card h3 { margin: 0 0 12px; font-size: 16px; }
+.ttu-values { margin: 0; display: grid; grid-template-columns: minmax(70px, 105px) minmax(0, 1fr); gap: 9px 12px; font-size: 14px; }
+.ttu-values dt { opacity: .7; }.ttu-values dd { margin: 0; overflow-wrap: anywhere; }
+.ttu-values ul { margin: 0; padding-left: 18px; }
+#ttu-body .tsf-drawer-header, #ttu-body .tns-drawer-header { display: flex !important; margin-bottom: 12px; }
+#ttu-body .inline-drawer-icon { display: none; }
+#ttu-body .inline-drawer-content { display: block !important; }
+#ttu-body .ttotto-sfw-settings, #ttu-body .ttotto-nsfw-settings { width: 100%; min-width: 0; }
+#ttu-wand-button { color: inherit; font: inherit; cursor: pointer; width: 100%; text-align: left; }
+@media (max-width: 480px) {
+    .ttu-overlay { padding: 6px; }.ttu-dialog { max-height: 97dvh; border-radius: 14px; }
+    .ttu-header { padding: 13px; }.ttu-body { padding: 12px; }.ttu-tabs { padding: 0 10px 10px; gap: 4px; }
+    .ttu-values { grid-template-columns: minmax(65px, 80px) minmax(0, 1fr); gap: 8px; }
+    .ttu-values .ttu-values { display: block; }.ttu-values .ttu-values dd { margin: 3px 0 8px; }
+}

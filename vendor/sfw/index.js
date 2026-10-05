@@ -1,0 +1,4296 @@
+// BEGIN LOCAL SCENE DETECTOR
+const scoreScene = (() => {
+// NSFW 로컬 감지기. API나 프롬프트를 호출하지 않는다.
+// 신체 단어 하나가 아니라 가까운 행동 표현과 함께 있을 때 강한 신호로 센다.
+const EN_BODY = String.raw`\b(?:breasts?|nipples?|clit(?:oris)?|pussy|cock|dick|penis|vulva|vagina|genitals?|outer\s+lips|bundle\s+of\s+nerves)\b`;
+const EN_ORAL = String.raw`\b(?:lick(?:s|ed|ing)?|suck(?:s|ed|ing)?|lap(?:s|ped|ping)?|suction)\b`;
+const EN_ORAL_MOTION = /\b(?:swirl(?:s|ed|ing)?|press(?:es|ed|ing)?|drag(?:s|ged|ging)?|circl(?:e|es|ed|ing)|flick(?:s|ed|ing)?|lick(?:s|ed|ing)?|suck(?:s|ed|ing)?|lap(?:s|ped|ping)?)\b/i;
+const EN_HAND = String.raw`\b(?:finger(?:s|ed|ing)?|digits?|hands?)\b`;
+const EN_INTIMATE = String.raw`\b(?:wetness|pussy|vagina|canal|clit(?:oris)?|nipples?|genitals?)\b`;
+const EN_MOTION = /\b(?:sink(?:s|ing)?|sank|buried|insert(?:s|ed|ing)?|pump(?:s|ed|ing)?|stretch(?:es|ed|ing)?|rub(?:s|bed|bing)?|strok(?:e|es|ed|ing)|penetrat(?:e|es|ed|ing)|fuck(?:s|ed|ing)?)\b/i;
+// 한국어에는 영문식 \b 경계가 통하지 않는다. 명사와 조사 경계를 확인하고
+// '보지 말고/자지 않고' 같은 동사, '자지러지다/성기게' 같은 다른 단어를 제외한다.
+function koreanNoun(words) {
+    return String.raw`(?<![가-힣A-Za-z0-9_])(?:${words})(?=$|[^가-힣A-Za-z0-9_]|(?:을|를|이|가|은|는|에|엔|에서|에게|의|도|만|로|으로|와|과|랑|부터|까지|처럼|보다|조차|마저|마다){1,3}(?=$|[^가-힣A-Za-z0-9_]))`;
+}
+const KO_HOMOGRAPHS = String.raw`(?:보지|자지)(?!(?:는|도|만)?\s*(?:말|않|못|마(?:라|요)?(?:$|[\s.!?])))`;
+const KO_BODY = koreanNoun(String.raw`가슴|유두|젖꼭지|성기|클리토리스|음핵|음순|${KO_HOMOGRAPHS}|애액|젖은\s*(?:구멍|속살)`);
+// '빨리/빨간/빨래'를 빨다의 활용형으로 세지 않는다.
+const KO_TOUCH = String.raw`(?:핥|빨(?=[아았고며면던듯다지]|$|[^가-힣])|빤(?=[다지듯]|$|[^가-힣])|빠는|애무|주무(?=[르른를름])|움켜|문지(?=[르른를름])|문질|쑤셔|쑤시|쑤셔대|비벼|비비|비볐|삽입|밀어\s*넣|박아\s*넣|잠겨|파묻|마디.{0,20}잠)`;
+const KO_AMBIGUOUS_ACTION = /삽입|박아\s*넣|쑤셔|쑤시|밀어\s*넣|잠겨|파묻|사정/;
+const KO_INTIMATE_CONTEXT = new RegExp(koreanNoun(String.raw`성기|클리토리스|음핵|음순|${KO_HOMOGRAPHS}|애액|질|항문|정액|발기|젖은\s*(?:구멍|속살)`)
+    + String.raw`|성적\s*(?:쾌감|자극|접촉|흥분)|애무|자위|성교|오르가즘`, 'i');
+const NEAR = String.raw`[^.!?。！？\n]{0,180}?`;
+function nearby(left, right, span = NEAR) {
+    return new RegExp(`(?:${left})${span}(?:${right})|(?:${right})${span}(?:${left})`, 'gi');
+}
+
+// 의복 마찰은 운동/세탁에도 등장한다. 같은 문단의 구체적인 성적 신체 반응이 있어야 인정한다.
+const EN_GENITAL_RESPONSE = nearby(String.raw`\b(?:cock|dick|penis|erection)\b`,
+    String.raw`\b(?:hard|stiff|rigid|erect|throb(?:s|bed|bing)?|aching|aroused)\b`);
+const KO_GENITAL_RESPONSE = nearby(koreanNoun(String.raw`성기|자지(?!(?:는|도|만)?\s*(?:말|않|못))|발기`),
+    String.raw`(?:발기|단단|팽팽|굳|빳빳|뻣뻣|욱신|발딱|꼿꼿)`, String.raw`[^.!?。！？\n]{0,80}?`);
+
+// 노출/젖은 몸/탈의는 위생 장면에서도 흔하다. 신체+동사의 일치만으로
+// 성적 행위라고 단정하지 않고, 일치한 행동의 문장 맥락을 확인한다.
+const HYGIENE = /\b(?:shower(?:s|ed|ing)?|bath(?:s|ing)?|bathe[ds]?|wash(?:es|ed|ing)?|rins(?:e|es|ed|ing)|soap(?:y)?|shampoo(?:s|ed|ing)?|scrub(?:s|bed|bing)?|lather(?:s|ed|ing)?|towell?(?:ed|ing)?|clean(?:s|ed|ing)?|dry(?:ing)?\s+(?:off|herself|himself))\b|샤워|목욕|씻|헹[구궈]|비누|샴푸|세정|물기|때를\s*(?:밀|벗)|수건.{0,20}(?:닦|말리)/i;
+const NONSEXUAL = /\b(?:pain|injur(?:y|ies|ed)|wound|bruise[ds]?|sore|fever|shiver(?:s|ed|ing)?|medical|examin(?:e|es|ed|ing)|bandage|breastfeed(?:s|ing)?|nurs(?:e|es|ed|ing)\s+(?:a|the|her)\s+baby)\b|통증|아파|아픈|부상|상처|멍든|진찰|검사|치료|수유/i;
+const CLOTHES_CHANGE = /\bchang(?:e|es|ed|ing)\s+(?:(?:her|his|their)\s+)?(?:clothes|clothing|shirt|pants|underwear|outfit)\b|\bchang(?:e|es|ed|ing)\s+into\b|갈아입/i;
+const SEXUAL_ACTION = /\b(?:lick(?:s|ed|ing)?|suck(?:s|ed|ing)?|fondl(?:e|es|ed|ing)|masturbat(?:e|es|ed|ing)|penetrat(?:e|es|ed|ing)|fuck(?:s|ed|ing)?|ejaculat(?:e|es|ed|ing)|orgasm(?:s|ed|ing)?|thrust(?:s|ed|ing)?)\b|핥|빨아|빨았|빨며|빨고|애무|자위|성교|사정(?:하|했|해|중)|오르가즘/i;
+const SEXUAL_INTENT = /\b(?:sexually|sexual\s+(?:pleasure|stimulation|contact)|arous(?:e|ed|al)|lust(?:ful)?|masturbat(?:e|es|ed|ing)|fondl(?:e|es|ed|ing))\b|성적\s*(?:쾌감|자극|접촉|흥분)|애무|자위/i;
+const NOT_AN_ACT = /\b(?:(?:did|does|do|is|was|were|will|would|could|had|has|have)\s+not|didn['’]t|doesn['’]t|don['’]t|wasn['’]t|isn['’]t|wouldn['’]t|couldn['’]t|never|without)\s+(?!(?:stop|ceas|pause|hesitat))|(?:하지|하지는|하지도|하지\s*않|핥지|빨지|문지르지|넣지|느끼지|삽입하지|사정하지).{0,12}(?:않|못)|(?:할|하려는)\s*(?:생각|계획)|\b(?:discuss(?:es|ed|ing)?|explain(?:s|ed|ing)?|definition|hypothetical)\b/i;
+const ROMANTIC_KISS = /키스가\s*깊어|혀가\s*얽|\bkiss(?:es|ed|ing)?\s+(?:(?:him|her|them|me|you|each\s+other)\s+)?(?:deeply|hungrily)\b|\btongues?\s+(?:tangled|met)\b/gi;
+
+function sentenceAt(source, start, end) {
+    const before = source.slice(Math.max(0, start - 180), start).match(/[^.!?。！？\n;]*$/)[0];
+    const after = source.slice(end, end + 180).match(/^[^.!?。！？\n;]*/)[0];
+    return before + source.slice(start, end) + after;
+}
+
+function paragraphAt(source, start, end) {
+    return source.slice(Math.max(0, start - 600), start).split(/\n\s*\n/).at(-1)
+        + source.slice(start, end) + source.slice(end, end + 600).split(/\n\s*\n/)[0];
+}
+
+function hasCurrentKiss(text) {
+    ROMANTIC_KISS.lastIndex = 0;
+    const matches = [...text.matchAll(ROMANTIC_KISS)];
+    return matches.some(match => {
+        const sentence = sentenceAt(text, match.index, match.index + match[0].length);
+        return !NOT_AN_ACT.test(sentence) && !NONSEXUAL.test(sentence);
+    });
+}
+
+
+const RULES = [
+    { label: '현재 명시적 행위', w: 4, re: /삽입(?:하|했|해|되|된|되는|중)|박아\s*넣|쑤셔\s*넣|사정(?:하|했|해|시키|하며|하는|하려)|오르가즘(?:에|을)\s*(?:도달|느끼)|질\s*(?:안|속)에\s*(?:넣|박)|\bmasturbat(?:e|es|ed|ing)\b|자위(?:를)?\s*(?:하|했|해|중)|\bpenetrat(?:e|es|ed|ing)\b|\bthrust(?:ed|ing|s)?\s+(?:inside|into|against)\b|\borgasm(?:s|ed|ing)\b|\bejaculat(?:e|es|ed|ing)\b|\bcame\s+(?:inside|over|on)\b|\bcoming\s+(?:inside|in\s+her|in\s+him)\b/gi },
+    { label: '영어 구강 접촉', w: 4, re: nearby(EN_BODY, EN_ORAL) },
+    { label: '영어 입·혀 접촉', w: 4, re: nearby(EN_BODY, String.raw`\b(?:tongue|mouth)\b`), require: EN_ORAL_MOTION },
+    { label: '영어 직접 행동', w: 4, re: nearby(EN_BODY, String.raw`\b(?:fuck(?:s|ed|ing)?|thrust(?:s|ed|ing)?|insert(?:s|ed|ing)?|fondl(?:e|es|ed|ing))\b`) },
+    { label: '영어 손 접촉', w: 4, re: nearby(EN_HAND, EN_INTIMATE), require: EN_MOTION },
+    { label: '한국어 직접 접촉', w: 4, re: nearby(KO_BODY, KO_TOUCH, String.raw`[^.!?。！？\n]{0,80}?`) },
+    { label: '영어 의복·골반 마찰과 성적 반응', w: 4,
+        re: nearby(String.raw`\b(?:jeans|sweatpants|trousers|underwear|panties|boxers|crotch|groin|pelvis|hips?|lap)\b`,
+            String.raw`\b(?:rub(?:s|bed|bing)?|grind(?:s|ing)?|ground|friction|press(?:es|ed|ing)?|rock(?:s|ed|ing)?)\b`),
+        requireParagraph: EN_GENITAL_RESPONSE },
+    { label: '한국어 의복·골반 마찰과 성적 반응', w: 4,
+        re: nearby(String.raw`(?:청바지|트레이닝\s*(?:팬츠|바지)|바지|속옷|팬티|가랑이|아랫도리|사타구니|골반|치골)`,
+            String.raw`(?:문질|문지|비비|비벼|마찰|밀착|눌러|누르|맞대|밀어붙)`, String.raw`[^.!?。！？\n]{0,80}?`),
+        requireParagraph: KO_GENITAL_RESPONSE },
+    { label: '신음 표기', w: 3, re: /하앙|흐응|아앙|흐읏|하아앙|응아|앗\s*…?\s*안|\bmoan(?:ed|ing|s)?\b|\bwhimper(?:ed|ing)?\b/gi },
+    { label: '현재 탈의·밀착', w: 2, re: /(?:옷|속옷|팬티|브래지어|바지|치마)(?:을|를)?\s*(?:벗기|벗겨|내리)|\bgrind(?:s|ing)?\s+(?:against|on|into)\b|\bground\s+(?:against|on|into)\b|\bstraddl(?:e|es|ed|ing)\s+(?:her|him|them)\b/gi },
+    { label: '성적 접촉 분위기', w: 1, re: /키스가\s*깊어|혀가\s*얽|목덜미에\s*입|귓불을\s*(?:물|빨|핥)|\bkiss(?:es|ed|ing)?\s+(?:(?:him|her|them|me|you|each\s+other)\s+)?(?:deeply|hungrily)\b|\btongues?\s+(?:tangled|met)\b|\bhands?\s+(?:slid|moved)\s+(?:under|between)\b/gi },
+];
+
+function scoreScene(text, customKeywords = '') {
+    const source = String(text ?? '')
+        .replace(/<(scene_state|sfw_scene)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
+        .replace(/<(?:scene_state|sfw_scene)\b[^>]*>[\s\S]*$/gi, '')
+        // 별개 행동을 한 쌍으로 연결하지 않는다. 샤워 뒤의 실제 성적 행동은 따로 검사한다.
+        .replace(/\b(?:while|whereas|meanwhile|but\s+then)\b|하지만|그러나/gi, '\n');
+    const hits = [];
+    for (const { label, re, w, require, requireParagraph } of RULES) {
+        re.lastIndex = 0;
+        let match;
+        let count = 0;
+        while (count < 3 && (match = re.exec(source)) !== null) {
+            const sentence = sentenceAt(source, match.index, re.lastIndex);
+            if (NOT_AN_ACT.test(sentence)) continue;
+            // '물건을 봉투에 쑤셔 넣다/카드를 삽입하다/못을 박아 넣다/사정하다'는
+            // 동사만으로 성적 행위가 아니다. 그 행동의 문장 안에 별도 근거가 필요하다.
+            if ((label === '현재 명시적 행위' || label === '한국어 직접 접촉')
+                && KO_AMBIGUOUS_ACTION.test(match[0]) && !KO_INTIMATE_CONTEXT.test(sentence)) continue;
+            if (NONSEXUAL.test(sentence) && !SEXUAL_ACTION.test(match[0])) continue;
+            const paragraph = paragraphAt(source, match.index, re.lastIndex);
+            const romanticContact = label === '성적 접촉 분위기' && hasCurrentKiss(match[0]);
+            const romanticVoice = label === '신음 표기' && hasCurrentKiss(paragraph);
+            if ((HYGIENE.test(sentence) || CLOTHES_CHANGE.test(sentence))
+                && !SEXUAL_ACTION.test(match[0]) && !romanticContact && !romanticVoice) continue;
+            // '샤워 중이다. 몸을 문질렀다.'처럼 위생 목적이 직전 문장에만 있어도 구분한다.
+            // 실제 키스와 그에 이어진 신음은 위생 장면 안에서도 별도 신호로 인정한다.
+            if ((HYGIENE.test(paragraph) || CLOTHES_CHANGE.test(paragraph))
+                && !SEXUAL_ACTION.test(match[0]) && !SEXUAL_INTENT.test(sentence)
+                && !romanticContact && !romanticVoice) continue;
+            // 동사가 신체/도구보다 먼저 나오는 어순도 같은 문장 안에서 확인한다.
+            if (require) {
+                const before = source.slice(Math.max(0, match.index - 180), match.index).match(/[^.!?。！？\n]*$/)[0];
+                const after = source.slice(re.lastIndex, re.lastIndex + 180).match(/^[^.!?。！？\n]*/)[0];
+                if (!require.test(before + match[0] + after)) continue;
+            }
+            if (requireParagraph) {
+                requireParagraph.lastIndex = 0;
+                if (!requireParagraph.test(paragraphAt(source, match.index, re.lastIndex))) continue;
+            }
+            hits.push({ label, text: match[0], w });
+            count++;
+        }
+    }
+    const lower = source.toLocaleLowerCase();
+    for (const keyword of String(customKeywords).split(',').map((word) => word.trim()).filter(Boolean)) {
+        const needle = keyword.toLocaleLowerCase();
+        for (let index = lower.indexOf(needle); index >= 0; index = lower.indexOf(needle, index + needle.length)) {
+            const sentence = sentenceAt(source, index, index + keyword.length);
+            if (!HYGIENE.test(sentence) && !CLOTHES_CHANGE.test(sentence) && !NONSEXUAL.test(sentence) && !NOT_AN_ACT.test(sentence)) {
+                hits.push({ label: '커스텀', text: keyword, w: 3 });
+                break;
+            }
+        }
+    }
+    const score = hits.reduce((sum, hit) => sum + hit.w, 0);
+    return { score, hits, routineOnly: (HYGIENE.test(source) || CLOTHES_CHANGE.test(source)) && score === 0 };
+}
+
+return scoreScene;
+})();
+// END LOCAL SCENE DETECTOR
+
+// 🫧또또SFW — 일반(전연령) 장면 연속성 추적 + 직전 전개 반복 금지 + 진도 관리
+// 또또(ttotto)/또또NSFW의 자매 확장. NSFW판과 동시에 설치해도 충돌하지 않도록 저장 키·태그·DOM 프리픽스를 전부 분리했다.
+// ST API는 getContext(), 로컬 감지기는 이 파일에 포함해 별도 JS 파일을 요구하지 않는다.
+//
+// 동작 개요 (하이브리드):
+//  1) 매 생성마다 프롬프트에 "현재 장면 상태 + 최근 N턴 전개(반복 금지) + 상태 태그 갱신 지시"를 주입
+//  2) AI 응답 끝의 <sfw_scene>{...}</sfw_scene> 태그를 파싱해 메시지 extra에 저장하고 본문에서 제거
+//  3) 태그가 누락되면(또는 수동 버튼) 보조 AI 호출로 최근 대화를 분석해 상태를 보정
+
+const MODULE_NAME = 'ttotto-sfw';
+// 설치된 폴더 이름이 무엇이든 동작하도록, 템플릿은 모듈 URL 기준으로 직접 불러온다.
+const EXTENSION_BASE_URL = new URL('.', import.meta.url);
+const PROMPT_KEY = 'ttotto_sfw_continuity';
+const CHAT_STATE_KEY = 'ttottoSfw';
+const MESSAGE_EXTRA_KEY = 'ttottoSfw';
+const LOG_PREFIX = '[🫧또또SFW]';
+const EXTENSION_VERSION = '0.2.42';
+const CHAT_STATE_SCHEMA_VERSION = 1;
+const ALLOWED_GENERATION_TYPES = new Set(['normal', 'regenerate', 'swipe', 'continue']);
+const DEVELOPER_UNLOCK_TAPS = 7;
+const DEVELOPER_TAP_RESET_MS = 5000;
+const DEVELOPER_PASSWORD = '130918';
+// setExtensionPrompt 안정 상수: IN_CHAT = 1, SYSTEM = 0 (또또와 동일한 이유로 직접 import 회피)
+const PROMPT_POSITION_IN_CHAT = 1;
+const PROMPT_ROLE_SYSTEM = 0;
+
+const STATE_TAG_REGEX = /<sfw_scene\b[^>]*>([\s\S]*?)<\/sfw_scene>/gi;
+const STATE_TAG_LOOSE_REGEX = /```(?:json)?\s*<sfw_scene\b[^>]*>[\s\S]*?<\/sfw_scene>\s*```/gi;
+// 모델이 상태 태그를 닫은 직후 덧붙인 단독 확인 문구만 제거한다.
+// 태그 앞의 본문이나 태그 뒤에 다른 서술이 하나라도 있으면 일치하지 않는다.
+const STATE_TRAILING_ACK_REGEX = /(<\/sfw_scene>[ \t]*(?:\r?\n[ \t]*```)?)[ \t\r\n]+(?:no\s+changes?|unchanged)[ \t]*[.!]?[ \t]*$/i;
+
+const PACE_INSTRUCTIONS = Object.freeze({
+    hold: 'Maintain the current stage of the scene. Deepen relevant detail, consequence, dialogue, and reaction without jumping ahead.',
+    slow: 'Move the scene forward to its next natural beat. Advance gradually — one meaningful step per response.',
+    push: 'Actively escalate. Each response must clearly progress the scene beyond where the previous one ended.',
+});
+
+// 장면 유형마다 진행의 의미가 다르므로 슬로우번 단계를 따로 둔다.
+const SCENE_TYPE_DEFS = Object.freeze({
+    general: Object.freeze({
+        ko: '일반',
+        stages: Object.freeze([null,
+            { en: 'Situation and atmosphere established', ko: '상황과 분위기 형성' },
+            { en: 'Characters engage with the immediate situation', ko: '현재 상황에 관여' },
+            { en: 'First meaningful development', ko: '첫 의미 있는 전개' },
+            { en: 'Development deepens or gains a complication', ko: '전개 심화·변수 발생' },
+            { en: 'Decisive turning point', ko: '결정적 전환점' },
+            { en: 'Resolution or transition permitted', ko: '해소·전환 허용' },
+        ]),
+    }),
+    daily: Object.freeze({
+        ko: '일상',
+        stages: Object.freeze([null,
+            { en: 'Everyday situation established', ko: '일상 상황 형성' },
+            { en: 'Small interaction begins', ko: '작은 상호작용 시작' },
+            { en: 'Shared activity develops', ko: '함께하는 행동 전개' },
+            { en: 'Mood or relationship gains depth', ko: '분위기·관계 심화' },
+            { en: 'Meaningful everyday beat', ko: '의미 있는 일상 전개' },
+            { en: 'Natural pause or transition permitted', ko: '자연스러운 마무리·전환 허용' },
+        ]),
+    }),
+    conversation: Object.freeze({
+        ko: '대화',
+        stages: Object.freeze([null,
+            { en: 'Topic and conversational mood established', ko: '주제와 대화 분위기 형성' },
+            { en: 'Initial exchange of views', ko: '초기 의견 교환' },
+            { en: 'Meaningful question, disclosure, or challenge', ko: '핵심 질문·고백·문제 제기' },
+            { en: 'Response, clarification, or deeper exchange', ko: '응답·해명·대화 심화' },
+            { en: 'Decision or conversational turning point', ko: '결정·대화 전환점' },
+            { en: 'Topic resolution or shift permitted', ko: '주제 정리·전환 허용' },
+        ]),
+    }),
+    romance: Object.freeze({
+        ko: '로맨스',
+        stages: Object.freeze([null,
+            { en: 'Awareness and emotional atmosphere', ko: '감정 인식과 분위기 형성' },
+            { en: 'Approach through words, attention, or proximity', ko: '말·관심·거리 좁히기' },
+            { en: 'First meaningful gesture or exchange', ko: '첫 의미 있는 표현·교류' },
+            { en: 'Emotional connection deepens', ko: '감정적 관계 심화' },
+            { en: 'Relationship turning point', ko: '관계의 전환점' },
+            { en: 'Emotional resolution or relationship transition permitted', ko: '감정 해소·관계 전환 허용' },
+        ]),
+    }),
+    conflict: Object.freeze({
+        ko: '갈등',
+        stages: Object.freeze([null,
+            { en: 'Friction or disagreement emerges', ko: '마찰·의견 충돌 발생' },
+            { en: 'Positions and stakes become clear', ko: '입장과 이해관계 확인' },
+            { en: 'Direct confrontation begins', ko: '직접 대립 시작' },
+            { en: 'Conflict escalates or reveals its cause', ko: '갈등 고조·원인 드러남' },
+            { en: 'Decisive response or turning point', ko: '결정적 대응·전환점' },
+            { en: 'Resolution, rupture, or consequence permitted', ko: '해결·결렬·결과 허용' },
+        ]),
+    }),
+    action: Object.freeze({
+        ko: '액션',
+        stages: Object.freeze([null,
+            { en: 'Threat or objective established', ko: '위협·목표 확인' },
+            { en: 'Engagement begins', ko: '행동 개시' },
+            { en: 'Active exchange or pursuit', ko: '공방·추격 진행' },
+            { en: 'Complication or danger intensifies', ko: '변수·위험 고조' },
+            { en: 'Decisive action', ko: '결정적 행동' },
+            { en: 'Outcome and aftermath permitted', ko: '결과·후속 장면 허용' },
+        ]),
+    }),
+    investigation: Object.freeze({
+        ko: '조사·미스터리',
+        stages: Object.freeze([null,
+            { en: 'Question or mystery established', ko: '의문·사건 형성' },
+            { en: 'Clues are gathered', ko: '단서 수집' },
+            { en: 'Evidence is connected', ko: '증거 연결' },
+            { en: 'Theory is tested or challenged', ko: '가설 검증·반전' },
+            { en: 'Key revelation', ko: '핵심 진실 발견' },
+            { en: 'Conclusion or next case transition permitted', ko: '결론·다음 국면 전환 허용' },
+        ]),
+    }),
+});
+
+const SCENE_TYPE_KEYS = new Set(Object.keys(SCENE_TYPE_DEFS));
+
+function sceneTypeDef(sceneType) {
+    return SCENE_TYPE_DEFS[SCENE_TYPE_KEYS.has(String(sceneType)) ? String(sceneType) : 'general'];
+}
+
+const SLOW_BURN_MIN_TURNS = Object.freeze({
+    gentle: 1,
+    slow: 2,
+    verySlow: 3,
+});
+const SLOW_BURN_TARGET_MAX_TURNS = 20;
+const SLOW_BURN_TARGET_MAX_LENGTH = 200;
+const DIALOGUE_BEAT_WINDOW = 2;
+
+// 장면 스타일 다이얼 — 개입 중에만 적용
+const STYLE_LENGTH_INSTRUCTIONS = Object.freeze({
+    tight: 'Length: keep the response tight — 2-3 short paragraphs. Every sentence must carry sensation, action, or reaction; cut filler narration. Leave room for the user to act.',
+    normal: '',
+    long: 'Length: write a full, unhurried response — take space to build each moment. Do not rush through beats; linger where it matters.',
+});
+const STYLE_BALANCE_INSTRUCTIONS = Object.freeze({
+    dialogue: 'Balance: dialogue-forward. Keep the characters actively exchanging relevant dialogue, reactions, questions, and answers. Physical description supports the conversation, not the other way around.',
+    balanced: '',
+    sensory: 'Balance: sensory-forward. Prioritize concrete physical sensation — touch, heat, breath, weight, sound. Keep dialogue sparse and purposeful.',
+    internal: 'Balance: interiority-forward. Keep the character\'s inner voice present — thoughts, restraint, want, conflict — woven through the physical action.',
+});
+
+// 해제 브릿지 — 개입 해제 직후 딱 한 번, 장면을 자연스럽게 마무리시키는 지시
+const BRIDGE_LINES = [
+    '[Scene Transition Bridge] The current scene has just reached a stopping point. Use this response to connect it naturally to what follows through a brief consequence, reaction, transition, or quiet continuation that fits the genre.',
+    'Preserve the established time, place, character state, and unresolved conversational context. Do not abruptly teleport, time-skip, or jump to an unrelated scene without an explicit transition on the page.',
+];
+
+// 실질적 무제한 — 잘림 방지용 안전 상한만 백만으로 걸어둔다
+const SAFETY_LIMIT = 1000000;
+
+const INTENSITY_HIGH = 5;
+
+// NSFW 장면 자동 인계: 또또NSFW가 실제 개입 중이면 그 상태를 우선하고,
+// 설치되어 있지 않아도 같은 로컬 신호 감지기로 SFW 주입을 잠시 멈춘다.
+const NSFW_SETTINGS_KEY = 'ttotto-nsfw';
+const NSFW_CHAT_STATE_KEY = 'ttottoNsfw';
+const NSFW_LOCAL_WINDOW = 2;
+const NSFW_LOCAL_THRESHOLDS = Object.freeze({ high: 3, normal: 4, low: 7 });
+const NSFW_COLD_STREAK = 2;
+const NSFW_STATE_TAG_REGEX = /<scene_state\b[^>]*>[\s\S]*?<\/scene_state>/gi;
+const NSFW_MESSAGE_EXTRA_KEY = 'ttottoNsfw';
+const REFINE_MESSAGE_CHAR_LIMIT = 12000;
+const REFINE_TOTAL_CHAR_LIMIT = 60000;
+
+const INTENSITY_SCALE_LINES = Object.freeze([
+    'INTENSITY SCALE (judge the scene facts at the END of the response, not isolated words or discussion):',
+    '- 0-1: ordinary, everyday scene; 2: mild tension, charm, or emotional charge without sustained conflict or closeness.',
+    '- 3-4: clearly rising tension, meaningful closeness, or an emotional turn worth tracking closely.',
+    '- 5-6: a confrontation, emotional peak, or pivotal moment is unmistakably underway; this is the active-supervision threshold.',
+    '- 7-8: the scene\'s climax is actively unfolding or intensifying; 9: a decisive turn is imminent; 10: peak moment or the scene is about to conclude.',
+]);
+
+const DEFAULT_SETTINGS = Object.freeze({
+    settingsSchemaVersion: 4,
+    enabled: true,
+    developerMode: false,
+    featurePreset: 'narrative', // continuity | basic | narrative | slowburn | custom
+    repeatGuard: true,
+    dialogueBeatGuard: true, // 최근 대사 의도·기능 반복 방지
+    dialogueFlow: true, // 현재 주제·직전 질문·새 사실 추적
+    transitionGuard: true, // 갑작스러운 장소·시간·장면 전환 방지
+    dialogueWindow: 2, // 대사 의도를 "또 하지 마" 목록에 올릴 최근 AI 답변 수 (1~6)
+    // CardInject 연동: 캐시트 카테고리를 다음 전개 힌트의 참고 자료로 사용 (개입 중에만 주입)
+    cardLinkEnabled: false,
+    cardLinkSelected: {}, // { [캐릭터 키]: [카테고리 key, ...] }
+    // SFW는 잔잔한 장면에서도 연속성이 필요하므로 상시 개입만 사용한다.
+    armMode: 'always',
+    nextBeatHints: true,
+    repeatWindow: 3,
+    maxBannedActs: 15, // 반복 금지 목록 총량 상한 — 넘치면 오래된 것부터 제외
+    paceMode: 'auto', // 'auto'(서사 강도 연동) | 'hold' | 'slow' | 'push'
+    slowBurnEnabled: false,
+    slowBurnIntensity: 'slow', // 'gentle'(단계당 1턴) | 'slow'(2턴) | 'verySlow'(3턴)
+    slowBurnUserOverride: true, // 사용자가 직접 다음 단계 행동을 시작하면 제한보다 우선
+    globalBans: [], // 전역 하드 리밋 — 모든 채팅의 개입 장면에 절대 금지로 주입
+    styleLength: 'normal', // 'tight' | 'normal' | 'long' — 개입 중 응답 길이
+    styleBalance: 'balanced', // 'dialogue' | 'balanced' | 'sensory' | 'internal' — 개입 중 묘사 밸런스
+    exitBridge: true, // 해제 직후 한 번, 장면 마무리 지시 주입
+    autoRefine: true,
+    diagnosticsEnabled: false,
+    refineProfileId: '',
+    refineVertexAuthMode: 'profile',
+    refineMaxTokens: 3000,
+    refineContextMessages: 8,
+});
+
+const FEATURE_PRESETS = Object.freeze({
+    continuity: Object.freeze({
+        repeatGuard: false,
+        dialogueBeatGuard: false,
+        dialogueFlow: false,
+        nextBeatHints: false,
+        transitionGuard: true,
+        slowBurnEnabled: false,
+    }),
+    basic: Object.freeze({
+        repeatGuard: true,
+        dialogueBeatGuard: true,
+        dialogueFlow: false,
+        nextBeatHints: false,
+        transitionGuard: true,
+        slowBurnEnabled: false,
+    }),
+    narrative: Object.freeze({
+        repeatGuard: true,
+        dialogueBeatGuard: true,
+        dialogueFlow: true,
+        nextBeatHints: true,
+        transitionGuard: true,
+        slowBurnEnabled: false,
+    }),
+    slowburn: Object.freeze({
+        repeatGuard: true,
+        dialogueBeatGuard: true,
+        dialogueFlow: true,
+        nextBeatHints: true,
+        transitionGuard: true,
+        slowBurnEnabled: true,
+    }),
+});
+
+function applyFeaturePreset(settings, preset) {
+    const config = FEATURE_PRESETS[preset];
+    if (!config) return false;
+    Object.assign(settings, config);
+    settings.featurePreset = preset;
+    return true;
+}
+
+function markFeaturePresetCustom(settings = getSettings()) {
+    settings.featurePreset = 'custom';
+}
+
+let runtimeActive = true;
+let uiReady = false;
+let initializationPromise = null;
+let eventsRegistered = false;
+let refineRunning = false;
+let refineFailure = null;
+let refineAbortController = null;
+let refineTimer = null;
+let activeRefineTarget = null;
+let queuedRefineTarget = null;
+let lastAutoRefineTarget = null;
+const postGenerationTimers = new Set();
+let messageObserverTimer = null;
+let lastObservedMessageKey = '';
+let popupOpen = false;
+let settingsHomeParent = null;
+let developerTapCount = 0;
+let developerTapTimer = null;
+const registeredEventHandlers = [];
+// 구버전에서 남긴 기록만 정리한다. 장면 상태와 설정은 유지한다.
+function clearLegacyDiagnostics() {
+    const metadata = getContext().chatMetadata;
+    if (!metadata) return;
+    let changed = false;
+    for (const key of ['ttottoSfwDiagnostics', 'ttottoSfwLastInjectionDiagnostic']) {
+        if (Object.prototype.hasOwnProperty.call(metadata, key)) {
+            delete metadata[key];
+            changed = true;
+        }
+    }
+    if (changed) saveChatMeta();
+}
+
+// Opt-in, bounded, memory-only diagnostics. No message bodies, names, keys,
+// profile identifiers, URLs, or raw error text are retained.
+const DIAGNOSTIC_LIMIT = 400;
+let diagnosticRows = [];
+let diagnosticSequence = 0;
+let diagnosticRequestSequence = 0;
+let diagnosticEpoch = 0;
+let diagnosticChatSequence = 0;
+const diagnosticChats = new WeakMap();
+let diagnosticFetchWrapper = null;
+let diagnosticOriginalFetch = null;
+// Response copies are read only while diagnostics are enabled. All exported
+// records contain structure only; the original response/promise is untouched.
+const DIAGNOSTIC_RESPONSE_BYTES = 1024 * 1024;
+const diagnosticReaders = new Set();
+const diagnosticResponseSlots = new Set();
+let diagnosticBodies = new Map();
+let diagnosticResponses = [];
+function resetDiagnosticEvidence() {
+    for (const reader of diagnosticReaders) { try { void reader.cancel().catch(() => {}); } catch {} }
+    diagnosticReaders.clear(); diagnosticResponseSlots.clear(); diagnosticBodies.clear(); diagnosticResponses = [];
+}
+function diagnosticNsfwReport(text) {
+    const blocks = [...String(text ?? '').matchAll(/<scene_state\b[^>]*>([\s\S]*?)<\/scene_state>/gi)];
+    let heat = null;
+    try {
+        const raw = blocks.at(-1)?.[1];
+        if (raw) {
+            const parsed = parseStateJson(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
+            if (typeof parsed.heat === 'number' && Number.isFinite(parsed.heat)) heat = parsed.heat;
+        }
+    } catch { /* No guessing on malformed reports. */ }
+    return { nsfwHeatPresent: heat !== null, ...(heat !== null ? { nsfwHeat: heat } : {}) };
+}
+function diagnosticTextShape(text) {
+    const state = parseStateFromText(text);
+    return {
+        chars: text.length, bodyChars: stateRecordBody(text).length,
+        openTag: /<sfw_scene\b/i.test(text), closeTag: /<\/sfw_scene\s*>/i.test(text),
+        escapedTag: /&lt;sfw_scene\b/i.test(text), nsfwTag: /<scene_state\b/i.test(text),
+        parsed: Boolean(state), characters: Object.keys(state?.characters ?? {}).length,
+        objects: Object.keys(state?.importantObjects ?? {}).length, nextCandidates: state?.next?.length ?? 0, ...diagnosticNsfwReport(text),
+        missing: state ? stateCompletenessIssues(state) : ['state'],
+    };
+}
+function diagnosticLink(message, index, text, chat = diagnosticScope()) {
+    const body = stateRecordBody(text);
+    const candidates = diagnosticResponses.filter(r => r.chat === chat && Date.now() - r.at < 120000);
+    const matches = candidates.filter(r => r.body === body);
+    diagnosticRecord('response_message_link', {
+        message: index, swipe: currentSwipeIndex(message), candidates: candidates.length, matches: matches.length,
+        reason: matches.length === 1 ? 'exact_body_match' : matches.length ? 'ambiguous_body_match' : 'no_exact_body_match',
+        ...(matches.length === 1 ? { requestId: matches[0].requestId, candidate: matches[0].candidate,
+            serverTag: matches[0].tag, serverComplete: matches[0].complete } : {}),
+    }, chat);
+}
+function diagnosticTrackBody(message, index, phase) {
+    if (!diagnosticsEnabled() || !message || message.is_user || message.is_system) return;
+    const text = String(message.mes ?? '');
+    const swipe = currentSwipeIndex(message), chat = diagnosticScope();
+    const previous = diagnosticBodies.get(message);
+    if (!previous || previous.swipe !== swipe || previous.chat !== chat) {
+        diagnosticRecord('body_checkpoint', { reason: phase, message: index, swipe, ...diagnosticTextShape(text) }, chat);
+        diagnosticLink(message, index, text, chat);
+    } else if (previous.text !== text) {
+        const old = previous.text;
+        let start = 0, endOld = old.length, endNew = text.length;
+        while (start < Math.min(endOld, endNew) && old[start] === text[start]) start++;
+        while (endOld > start && endNew > start && old[endOld - 1] === text[endNew - 1]) { endOld--; endNew--; }
+        const withoutSpace = s => s.replace(/\s/g, '');
+        const withoutMarkup = s => withoutSpace(s.replace(/<[^>]*>/g, '').replace(/[*_`]/g, ''));
+        diagnosticRecord('body_changed', {
+            reason: phase, message: index, swipe, beforeChars: old.length, afterChars: text.length,
+            removedChars: endOld - start, addedChars: endNew - start,
+            sameSceneBody: stateRecordBody(old) === stateRecordBody(text),
+            whitespaceOnly: withoutSpace(old) === withoutSpace(text),
+            markupOnly: withoutMarkup(old) === withoutMarkup(text),
+            oldOpenTag: /<sfw_scene\b/i.test(old), newOpenTag: /<sfw_scene\b/i.test(text),
+        }, chat);
+        diagnosticLink(message, index, text, chat);
+    }
+    // Short-lived bounded copies for change classification, never serialized.
+    if (text.length <= 65536) {
+        diagnosticBodies.delete(message);
+        diagnosticBodies.set(message, { text, swipe, index, chat });
+        if (diagnosticBodies.size > 12) diagnosticBodies.delete(diagnosticBodies.keys().next().value);
+    } else {
+        diagnosticBodies.delete(message);
+        diagnosticRecord('body_checkpoint_skipped', { reason: 'size_limit', message: index, swipe }, chat);
+    }
+}
+function diagnosticOutputParts(payload) {
+    const rows = [];
+    const contentText = content => typeof content === 'string' ? content : Array.isArray(content)
+        ? content.filter(p => !p?.thought && (p?.type === 'text' || p?.type === 'output_text' || !p?.type))
+            .map(p => typeof p?.text === 'string' ? p.text : '').join('') : '';
+    if (typeof payload === 'string') rows.push({ text: payload, candidate: 0 });
+    else if (Array.isArray(payload?.choices)) payload.choices.forEach((c, i) => rows.push({
+        text: contentText(c.message?.content ?? c.delta?.content ?? c.text), candidate: c.index ?? i, finish: c.finish_reason, refused: Boolean(c.message?.refusal),
+    }));
+    else if (Array.isArray(payload?.candidates)) payload.candidates.forEach((c, i) => rows.push({
+        text: contentText(c.content?.parts), candidate: c.index ?? i, finish: c.finishReason,
+    }));
+    else if (Array.isArray(payload?.results)) payload.results.forEach((c, i) => rows.push({ text: contentText(c.text), candidate: i }));
+    else if (Array.isArray(payload?.output)) rows.push({ text: payload.output.filter(p => p.type === 'message').map(p => contentText(p.content)).join(''), candidate: 0, finish: payload.status });
+    else if (payload?.type === 'content_block_delta') rows.push({ text: payload.delta?.type === 'text_delta' ? contentText(payload.delta.text) : '', candidate: 0 });
+    else if (payload?.type === 'content_block_start') rows.push({ text: payload.content_block?.type === 'text' ? contentText(payload.content_block.text) : '', candidate: 0 });
+    else if (payload?.type === 'message_delta') rows.push({ text: '', candidate: 0, finish: payload.delta?.stop_reason });
+    else if (typeof payload?.content === 'string' || Array.isArray(payload?.content)) rows.push({ text: contentText(payload.content), candidate: 0, finish: payload.stop_reason });
+    else if (typeof payload?.text === 'string') rows.push({ text: payload.text, candidate: 0 });
+    return rows;
+}
+async function diagnosticInspectResponse(response, info, requestId, chat, epoch) {
+    const alive = () => diagnosticsEnabled() && epoch === diagnosticEpoch;
+    const discard = () => { try { void response?.body?.cancel().catch(() => {}); } catch {} };
+    if (!alive()) { discard(); return; }
+    const record = (stage, data) => { if (alive()) diagnosticRecord(stage, { requestId, ...data }, chat); };
+    if (!info?.reportInstruction) { discard(); record('server_response_skipped', { reason: info ? 'no_report_instruction' : 'request_unreadable' }); return; }
+    let reader, timer;
+    try {
+        if (response && !response.ok) { discard(); record('server_response_unavailable', { reason: 'http_error', status: response.status }); return; }
+        if (!response) { record('server_response_unavailable', { reason: 'clone_failed' }); return; }
+        const copy = response;
+        if (!copy.body?.getReader) { record('server_response_unavailable', { reason: 'unreadable_body' }); return; }
+        reader = copy.body.getReader(); diagnosticReaders.add(reader);
+        let timedOut = false;
+        timer = setTimeout(() => { timedOut = true; void reader.cancel().catch(() => {}); }, 45000);
+        const decoder = new TextDecoder();
+        let raw = '', bytes = 0, ended = false, limited = false;
+        while (alive()) {
+            const chunk = await reader.read();
+            if (chunk.done) { ended = !timedOut; break; }
+            bytes += chunk.value.byteLength;
+            if (bytes > DIAGNOSTIC_RESPONSE_BYTES) { limited = true; break; }
+            raw += decoder.decode(chunk.value, { stream: true });
+        }
+        if (!alive()) return;
+        raw += decoder.decode();
+        if (limited || timedOut) { record('server_response_unavailable', { reason: limited ? 'size_limit' : 'read_timeout', bytes }); return; }
+        const stream = Boolean(info.stream) || /text\/event-stream/i.test(copy.headers.get('content-type') ?? '');
+        let rows = [], complete = ended, malformed = false, terminated = false;
+        if (stream) {
+            const candidates = new Map();
+            for (const event of raw.replace(/\r\n?/g, '\n').split(/\n\n/)) {
+                const data = event.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
+                if (!data) continue;
+                if (data === '[DONE]') { terminated = true; continue; }
+                let payload; try { payload = JSON.parse(data); } catch { malformed = true; continue; }
+                if (payload.type === 'message_stop') terminated = true;
+                for (const part of diagnosticOutputParts(payload)) {
+                    const key = Number(part.candidate) || 0;
+                    const target = candidates.get(key) ?? { text: '', candidate: key };
+                    target.text += part.text; if (part.finish) { target.finish = part.finish; terminated = true; }
+                    candidates.set(key, target);
+                }
+            }
+            rows = [...candidates.values()]; complete = ended && terminated && !malformed;
+        } else {
+            let payload;
+            try { payload = JSON.parse(raw); } catch { record('server_response_unavailable', { reason: 'invalid_json', bytes }); return; }
+            rows = diagnosticOutputParts(payload);
+        }
+        if (!rows.length) { record('server_response_unavailable', { reason: 'unsupported_response', stream, bytes }); return; }
+        for (const row of rows) {
+            const body = stateRecordBody(row.text), shape = diagnosticTextShape(row.text);
+            record('server_response_observed', { ...shape, candidate: Number(row.candidate) || 0, stream, complete, bytes,
+                reason: !complete ? 'incomplete_stream' : row.refused || /^(?:content_filter|SAFETY|RECITATION)$/.test(row.finish ?? '') ? 'blocked_response' : !row.text ? 'empty_answer' : shape.parsed ? 'parsed_tag' : shape.openTag ? 'invalid_or_unclosed_tag' : shape.escapedTag ? 'escaped_tag' : 'missing_tag',
+                tokenLimited: /^(?:length|max_tokens|MAX_TOKENS)$/.test(row.finish ?? ''),
+                stopped: /^(?:stop|end_turn|stop_sequence|STOP|completed)$/.test(row.finish ?? ''),
+            });
+            // Bounded transient bodies allow exact matching, never stored in chat or exported.
+            if (body.length <= 65536) diagnosticResponses.push({ chat, at: Date.now(), requestId, candidate: Number(row.candidate) || 0,
+                body, tag: shape.openTag, complete });
+            if (diagnosticResponses.length > 20) diagnosticResponses.shift();
+        }
+        for (const [message, entry] of diagnosticBodies) if (entry.chat === chat && entry.swipe === currentSwipeIndex(message)) diagnosticLink(message, entry.index, entry.text, chat);
+    } catch { record('server_response_unavailable', { reason: 'read_failed' }); }
+    finally {
+        clearTimeout(timer);
+        if (reader) { diagnosticReaders.delete(reader); try { void reader.cancel().catch(() => {}); } catch {} }
+    }
+}
+
+function diagnosticsEnabled() {
+    return Boolean(runtimeActive && getContext().extensionSettings?.[MODULE_NAME]?.diagnosticsEnabled);
+}
+function diagnosticScope() {
+    const metadata = getContext().chatMetadata;
+    if (!metadata || typeof metadata !== 'object') return 0;
+    if (!diagnosticChats.has(metadata)) diagnosticChats.set(metadata, ++diagnosticChatSequence);
+    return diagnosticChats.get(metadata);
+}
+function diagnosticRecord(stage, data = {}, chat = diagnosticScope()) {
+    if (!diagnosticsEnabled()) return;
+    // Only call with structural values computed below, never API/user text.
+    const values = {};
+    for (const [key, value] of Object.entries(data)) {
+        if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) values[key] = value;
+        else if (key === 'reason' && /^[a-z_-]{1,48}$/.test(value)) values[key] = value;
+        else if (key === 'missing' && Array.isArray(value)) values[key] = value.filter(v => ['state', 'location', 'characters', 'acts', 'intensity', 'stage', 'next'].includes(v));
+    }
+    const previous = diagnosticRows.at(-1);
+    if (previous?.stage === stage && previous.chat === chat && JSON.stringify(previous.data) === JSON.stringify(values)) {
+        previous.repeats++;
+        previous.lastAt = new Date().toISOString();
+    } else {
+        diagnosticRows.push({ seq: ++diagnosticSequence, at: new Date().toISOString(), chat, stage, data: values, repeats: 1 });
+        if (diagnosticRows.length > DIAGNOSTIC_LIMIT) diagnosticRows.shift();
+    }
+    renderDiagnostics();
+}
+function diagnosticState() {
+    const settings = getContext().extensionSettings?.[MODULE_NAME] ?? {};
+    const meta = getContext().chatMetadata?.[CHAT_STATE_KEY] ?? {};
+    const nsfw = getContext().chatMetadata?.[NSFW_CHAT_STATE_KEY] ?? {};
+    return { enabled: Boolean(settings.enabled), chatEnabled: Boolean(meta.enabled), autoRefine: Boolean(settings.autoRefine),
+        suspended: Boolean(meta.nsfwSuspended), resumePending: Boolean(meta.nsfwResumePending),
+        nsfwAutoArmed: Boolean(nsfw.autoArmed), nsfwArmedByHeat: nsfw.armSource === 'heat', nsfwArmedLocally: nsfw.armSource === 'local', nsfwForceArmed: Boolean(nsfw.forceArmed), nsfwBridge: Boolean(nsfw.bridgePending),
+        refineRunning, pendingGenerations: generationEvents.length };
+}
+function diagnosticReport() {
+    return JSON.stringify({ extension: MODULE_NAME, version: EXTENSION_VERSION, recording: diagnosticsEnabled(),
+        note: 'Memory-only; no API keys or dialogue contents. request_observed means the fetch boundary, not proof of model receipt. server_response_observed describes a bounded response copy at the fetch boundary, not guaranteed provider-original output if another wrapper precedes this one. Response/message links require matching bodies; unmatched or ambiguous results are unconfirmed. No raw bodies are exported.',
+        current: diagnosticState(), events: diagnosticRows }, null, 2);
+}
+function renderDiagnostics() {
+    try {
+        const box = document.getElementById('tsf-diagnostic-log');
+        if (box) box.value = diagnosticReport();
+        const status = document.getElementById('tsf-diagnostic-status');
+        if (status) status.textContent = `${diagnosticsEnabled() ? '기록 중' : '기록 꺼짐'} · ${diagnosticRows.length}/${DIAGNOSTIC_LIMIT}건 · 새로고침하면 지워져요`;
+    } catch { /* A missing/stale diagnostics panel must not affect generation. */ }
+}
+function clearDiagnostics() {
+    diagnosticRows = [];
+    diagnosticEpoch++;
+    resetDiagnosticEvidence();
+    renderDiagnostics();
+}
+function diagnosticResponse(message, index) {
+    if (!diagnosticsEnabled()) return;
+    diagnosticTrackBody(message, index, 'before_collection');
+    const text = String(message.mes ?? '');
+    const state = parseStateFromText(text);
+    let reason = 'missing_tag';
+    if (/<sfw_scene\b/i.test(text)) {
+        reason = /<\/sfw_scene\s*>/i.test(text) ? 'invalid_tag' : 'unclosed_tag';
+        if (state) reason = 'parsed_tag';
+        else if (reason === 'invalid_tag') {
+            const blocks = [...text.matchAll(STATE_TAG_REGEX)];
+            const json = blocks.at(-1)?.[1] ?? '';
+            try {
+                const start = json.indexOf('{'), end = json.lastIndexOf('}');
+                if (start < 0 || end <= start) throw new Error();
+                parseStateJson(json.slice(start, end + 1));
+                reason = 'empty_state';
+            } catch { reason = 'invalid_json'; }
+        }
+    }
+    diagnosticRecord('response_observed', {
+        reason,
+        message: index, swipe: currentSwipeIndex(message), chars: text.length,
+        openTag: /<sfw_scene\b/i.test(text), closeTag: /<\/sfw_scene\s*>/i.test(text),
+        escapedTag: /&lt;sfw_scene\b/i.test(text), nsfwTag: /<scene_state\b/i.test(text),
+        parsed: Boolean(state), ...diagnosticCache(message),
+        characters: Object.keys(state?.characters ?? {}).length,
+        objects: Object.keys(state?.importantObjects ?? {}).length, nextCandidates: state?.next?.length ?? 0, ...diagnosticNsfwReport(text),
+        missing: state ? stateCompletenessIssues(state) : ['state'], ...diagnosticState(),
+    });
+}
+function diagnosticInspectPayload(body, requestId, chat, epoch) {
+    if (!diagnosticsEnabled() || epoch !== diagnosticEpoch) return;
+    let payload;
+    try { payload = typeof body === 'string' ? JSON.parse(body) : null; } catch { /* opaque body */ }
+    if (!payload || typeof payload !== 'object') {
+        diagnosticRecord('request_observed', { requestId, readable: false }, chat);
+        return;
+    }
+    const parts = [];
+    for (const message of Array.isArray(payload.messages) ? payload.messages : []) {
+        if (typeof message?.content === 'string') parts.push(message.content);
+        else if (Array.isArray(message?.content)) {
+            for (const item of message.content) if (typeof item?.text === 'string') parts.push(item.text);
+        }
+    }
+    if (typeof payload.prompt === 'string') parts.push(payload.prompt);
+    const content = parts.join('\n');
+    const info = {
+        requestId, readable: true, stream: Boolean(payload.stream),
+        sfwDirective: content.includes('[Scene Continuity Directive]'),
+        reportInstruction: (content.includes('STATE REPORT: End your response with exactly one state block') || content.includes('[SFW Return Report]')) && content.includes('<sfw_scene>'),
+        returnReport: content.includes('[SFW Return Report]'),
+        nsfwMonitor: content.includes('[Scene Monitor]'),
+        messages: Array.isArray(payload.messages) ? payload.messages.length : 0,
+    };
+    diagnosticRecord('request_observed', info, chat);
+    return info;
+}
+function stopDiagnosticFetch() {
+    diagnosticEpoch++;
+    resetDiagnosticEvidence();
+    if (diagnosticFetchWrapper && globalThis.fetch === diagnosticFetchWrapper) {
+        globalThis.fetch = diagnosticOriginalFetch;
+        diagnosticFetchWrapper = null;
+        diagnosticOriginalFetch = null;
+    }
+    // If another extension wrapped us, leave that wrapper intact. Ours is inert
+    // while diagnostics are off, and can be reused when enabled again.
+}
+function syncDiagnosticFetch() {
+    if (!diagnosticsEnabled()) { stopDiagnosticFetch(); return; }
+    if (diagnosticFetchWrapper || typeof globalThis.fetch !== 'function') return;
+    const original = globalThis.fetch;
+    diagnosticOriginalFetch = original;
+    diagnosticFetchWrapper = function (...args) {
+        let observed = false, requestId, chat, epoch, requestInfo;
+        try {
+            if (diagnosticsEnabled()) {
+                const [input, init] = args;
+                const url = new URL(typeof input === 'string' || input instanceof URL ? String(input) : input?.url, globalThis.location?.href);
+                observed = url.origin === globalThis.location?.origin
+                    && /^\/api\/backends\/(?:chat|text)-completions\/generate$/.test(url.pathname);
+                if (observed) {
+                    requestId = ++diagnosticRequestSequence;
+                    chat = diagnosticScope(); epoch = diagnosticEpoch;
+                    if (init && Object.prototype.hasOwnProperty.call(init, 'body')) requestInfo = diagnosticInspectPayload(init.body, requestId, chat, epoch);
+                    else if (typeof Request !== 'undefined' && input instanceof Request) {
+                        // Clone before the request consumes its body; never await it.
+                        requestInfo = input.clone().text().then(body => diagnosticInspectPayload(body, requestId, chat, epoch)).catch(() => null);
+                    } else diagnosticInspectPayload(null, requestId, chat, epoch);
+                }
+            }
+        } catch { /* diagnostics must never break generation */ }
+        const result = Reflect.apply(original, this, args);
+        if (observed && typeof result?.then === 'function') void result.then(response => {
+            if (epoch === diagnosticEpoch) {
+                diagnosticRecord('request_finished', { requestId, status: response.status, ok: response.ok }, chat);
+                // Reserve a bounded slot and clone before the caller consumes it.
+                if (diagnosticResponseSlots.size >= 4) {
+                    diagnosticRecord('server_response_unavailable', { requestId, reason: 'reader_limit' }, chat);
+                    return;
+                }
+                const slot = {}; diagnosticResponseSlots.add(slot);
+                let copy = null;
+                if (requestInfo?.reportInstruction || typeof requestInfo?.then === 'function') {
+                    try { copy = response.clone(); } catch {}
+                }
+                void Promise.resolve(requestInfo).then(info => diagnosticInspectResponse(copy, info, requestId, chat, epoch))
+                    .catch(() => {}).finally(() => diagnosticResponseSlots.delete(slot));
+            }
+        }, () => {
+            if (epoch === diagnosticEpoch) diagnosticRecord('request_failed', { requestId }, chat);
+        }).catch(() => {});
+        return result;
+    };
+    globalThis.fetch = diagnosticFetchWrapper;
+}
+async function copyDiagnostics() {
+    const report = diagnosticReport();
+    try { await navigator.clipboard.writeText(report); toastr.success('진단 기록을 복사했어요.', '🫧또또SFW'); }
+    catch {
+        const box = document.getElementById('tsf-diagnostic-log');
+        if (box) { box.value = report; box.focus(); box.select(); }
+        toastr.info('아래 기록이 선택됐어요. 직접 복사하거나 파일로 내려받아 주세요.', '🫧또또SFW');
+    }
+}
+function downloadDiagnostics() {
+    const url = URL.createObjectURL(new Blob([diagnosticReport()], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = url; link.download = `ttotto-sfw-diagnostics-${Date.now()}.json`;
+    link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ───────────────────────── 컨텍스트/설정 ─────────────────────────
+
+function getContext() {
+    return SillyTavern.getContext();
+}
+
+function getEventTypes(context = getContext()) {
+    return context.eventTypes ?? context.event_types ?? {};
+}
+
+// BEGIN STATE TAG DISPLAY GUARD
+// 표시용 사본만 필터링한다. 채팅 원문·선택 스와이프·상태 수집에는 손대지 않는다.
+const DISPLAY_RULE_ID = MODULE_NAME === 'ttotto-nsfw'
+    ? 'c3d51f0b-6ad4-4aaa-8801-6ba5efec9a13' : '709b05fb-c531-40a8-8de7-206d2c4fc1ce';
+const DISPLAY_STYLE_ID = `${MODULE_NAME}-state-tag-display-guard`;
+const DISPLAY_TAG_NAMES = '(?:scene_state|sfw_scene)';
+const DISPLAY_OPEN = '(?:<|&lt;)';
+const DISPLAY_CLOSE = '(?:>|&gt;)';
+const DISPLAY_PARTIAL_NAMES = ['scene_state', 'sfw_scene'].flatMap((name) =>
+    Array.from({ length: name.length - 1 }, (_, i) => name.slice(0, i + 1))).join('|');
+const DISPLAY_TAG_BODY = `${DISPLAY_OPEN}(${DISPLAY_TAG_NAMES})\\b[^>]*?${DISPLAY_CLOSE}[\\s\\S]*?(?:${DISPLAY_OPEN}\\/\\1\\s*${DISPLAY_CLOSE}|$)`
+    + `|${DISPLAY_OPEN}\\/?${DISPLAY_TAG_NAMES}\\b[^>]*?(?:${DISPLAY_CLOSE}|$)`;
+const DISPLAY_TAG_PATTERN = `(?:\\x60{3}(?:json)?[ \t]*(?:\\r?\\n)?[ \t]*)?(?:${DISPLAY_TAG_BODY}|${DISPLAY_OPEN}\\/?(?:${DISPLAY_PARTIAL_NAMES})$)(?:[ \t\\r\\n]*\\x60{3})?`;
+const DISPLAY_TAG_REGEX = new RegExp(DISPLAY_TAG_PATTERN, 'gi');
+let displayGuardActive = false;
+let displayFormatterInstalled = null;
+let displayObserver = null;
+
+function stripStateTagsForDisplay(text) {
+    // JSON 코드 블록 안의 태그도 같은 문자열 단계에서 숨긴다. 다른 코드 블록은 유지한다.
+    return String(text ?? '').replace(DISPLAY_TAG_REGEX, '');
+}
+
+function displayFormattingHook(text, context = {}) {
+    if (!displayGuardActive || context.isUser || context.isSystem || context.isReasoning) return text;
+    return stripStateTagsForDisplay(text);
+}
+
+function removeOwnedDisplayRule() {
+    const context = getContext();
+    const scripts = context.extensionSettings?.regex;
+    if (!Array.isArray(scripts)) return;
+    const index = scripts.findIndex((script) => script?.id === DISPLAY_RULE_ID);
+    if (index < 0) return;
+    scripts.splice(index, 1);
+    context.saveSettingsDebounced?.();
+}
+
+function ensureDisplayRule() {
+    const context = getContext();
+    const settings = context.extensionSettings;
+    if (settings.regex !== undefined && !Array.isArray(settings.regex)) return;
+    settings.regex ??= [];
+    const rule = {
+        id: DISPLAY_RULE_ID,
+        scriptName: `${MODULE_NAME} · 상태 태그 숨김 (표시 전용)`,
+        findRegex: `/${DISPLAY_TAG_PATTERN}/gi`, replaceString: '', trimStrings: [],
+        placement: [2], disabled: false, markdownOnly: true, promptOnly: false,
+        runOnEdit: true, substituteRegex: 0, minDepth: null, maxDepth: null,
+    };
+    const existing = settings.regex.find((script) => script?.id === DISPLAY_RULE_ID);
+    if (existing && JSON.stringify(existing) === JSON.stringify(rule)) return;
+    if (existing) Object.assign(existing, rule);
+    else settings.regex.push(rule);
+    context.saveSettingsDebounced?.();
+}
+
+function scrubRenderedStateTags(root) {
+    if (!displayGuardActive || !root?.closest?.('#chat')) return;
+    const messageElement = root.closest('.mes');
+    if (!messageElement || messageElement.getAttribute('is_user') === 'true'
+        || messageElement.getAttribute('is_system') === 'true') return;
+    const walker = document.createTreeWalker(root, 4);
+    const nodes = [];
+    let text = '';
+    let node;
+    while ((node = walker.nextNode())) {
+        nodes.push({ node, start: text.length, end: text.length + node.data.length });
+        text += node.data;
+    }
+    if (!text) return;
+    const ranges = [...text.matchAll(DISPLAY_TAG_REGEX)].map((match) => [match.index, match.index + match[0].length]);
+    // HTML 정화기가 알 수 없는 태그만 벗겨낸 경우, 원문에서 확인된 기계용 내용만 숨긴다.
+    // 일반 JSON이나 대화 본문을 형태만 보고 삭제하지 않는다.
+    const messageId = messageElement.getAttribute('mesid');
+    const index = messageId == null || messageId.trim() === '' ? NaN : Number(messageId);
+    const message = Number.isInteger(index) ? getContext().chat?.[index] : null;
+    if (message && !message.is_user && !message.is_system) {
+        const raw = String(message.mes ?? '');
+        for (const match of raw.matchAll(/<(scene_state|sfw_scene)\b[^>]*>([\s\S]*?)(?:<\/\1\s*>|$)/gi)) {
+            const payload = match[2].replace(new RegExp(`${DISPLAY_OPEN}\\/(?:${DISPLAY_TAG_NAMES}|${DISPLAY_PARTIAL_NAMES})$`, 'i'), '').trim();
+            if (!payload) continue;
+            const position = text.lastIndexOf(payload);
+            if (position >= 0) ranges.push([position, position + payload.length]);
+        }
+    }
+    // 겹치는 범위를 합치고 뒤에서부터 제거해 앞쪽 노드의 오프셋과 서식을 보존한다.
+    ranges.sort((a, b) => a[0] - b[0]);
+    const merged = [];
+    for (const range of ranges) {
+        const last = merged.at(-1);
+        if (last && range[0] <= last[1]) last[1] = Math.max(last[1], range[1]);
+        else merged.push(range);
+    }
+    for (const [start, end] of merged.reverse()) {
+        const first = nodes.find((item) => item.start <= start && item.end > start);
+        const last = nodes.find((item) => item.start < end && item.end >= end);
+        if (!first || !last || !first.node.isConnected || !last.node.isConnected) continue;
+        const range = document.createRange();
+        range.setStart(first.node, start - first.start);
+        range.setEnd(last.node, end - last.start);
+        range.deleteContents();
+    }
+}
+
+function startDisplayObserver() {
+    if (displayObserver || typeof MutationObserver !== 'function' || !document.documentElement) return;
+    const style = document.createElement('style');
+    style.id = DISPLAY_STYLE_ID;
+    style.textContent = '#chat .mes:not([is_user="true"]):not([is_system="true"]) .mes_text scene_state, '
+        + '#chat .mes:not([is_user="true"]):not([is_system="true"]) .mes_text sfw_scene { display:none !important; }';
+    (document.head ?? document.documentElement).append(style);
+    displayObserver = new MutationObserver((records) => {
+        if (!displayGuardActive) return;
+        const roots = new Set();
+        const collect = (node, descendants = false) => {
+            const element = node?.nodeType === 1 ? node : node?.parentElement;
+            const root = element?.closest?.('#chat .mes_text');
+            if (root) roots.add(root);
+            if (descendants) element?.querySelectorAll?.('.mes_text').forEach((item) => {
+                if (item.closest('#chat')) roots.add(item);
+            });
+        };
+        for (const record of records) {
+            collect(record.target);
+            for (const node of record.addedNodes ?? []) collect(node, true);
+        }
+        roots.forEach(scrubRenderedStateTags);
+    });
+    // MutationObserver callbacks run at the microtask checkpoint before the browser paints.
+    // 구버전·Regex 비활성·번역 확장의 직접 DOM 갱신에도 표시 노드만 정리한다.
+    displayObserver.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+    document.querySelectorAll('#chat .mes_text').forEach(scrubRenderedStateTags);
+}
+
+function stopStateTagDisplayGuard() {
+    displayGuardActive = false;
+    displayObserver?.disconnect();
+    displayObserver = null;
+    document.getElementById(DISPLAY_STYLE_ID)?.remove();
+    removeOwnedDisplayRule();
+    // 포맷 훅은 모듈당 한 번만 등록한다. 비활성 중에는 원문을 그대로 반환한다.
+}
+
+function syncStateTagDisplayGuard() {
+    displayGuardActive = Boolean(runtimeActive && getSettings().enabled);
+    if (!displayGuardActive) { stopStateTagDisplayGuard(); return; }
+    const formatter = getContext().messageFormatter;
+    if (typeof formatter?.addHook === 'function' && formatter !== displayFormatterInstalled) {
+        formatter.addHook(displayFormattingHook, { stage: 'beforeRegex', order: 0 });
+        displayFormatterInstalled = formatter;
+    }
+    // 정식 버전에서는 표시 전용 Regex, 새 포맷터가 있는 버전에서는 훅도 함께 보호한다.
+    // 사용자의 기존 Regex나 Regex 전체 사용 여부는 바꾸지 않는다.
+    ensureDisplayRule();
+    startDisplayObserver();
+}
+// END STATE TAG DISPLAY GUARD
+
+function getSettings() {
+    const context = getContext();
+    if (!context.extensionSettings[MODULE_NAME]) {
+        context.extensionSettings[MODULE_NAME] = structuredClone(DEFAULT_SETTINGS);
+    }
+    const settings = context.extensionSettings[MODULE_NAME];
+    const previousSchemaVersion = Number(settings.settingsSchemaVersion) || 0;
+    for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
+        if (settings[key] === undefined) settings[key] = structuredClone(value);
+    }
+    // v2: UI 추천값과 실제 기본값을 자동으로 통일한다.
+    if (previousSchemaVersion < 2 && settings.paceMode === 'slow') settings.paceMode = 'auto';
+    // v3: SFW는 낮은 강도의 일상에서도 연속성이 필요하므로 채팅 토글이 곧 개입 스위치다.
+    if (previousSchemaVersion < 3) {
+        // 기존 사용자의 세부 선택은 덮어쓰지 않고 사용자 설정으로 보존한다.
+        settings.featurePreset = 'custom';
+    }
+    // v4: 목표 장면 유지는 개발자 전용. 구버전에서 남은 활성 목표가 뒤에서 재개되지 않게 정리한다.
+    if (previousSchemaVersion < 4) {
+        settings.developerMode = false;
+        const meta = context.chatMetadata?.[CHAT_STATE_KEY];
+        if (meta) {
+            meta.slowBurnTargetActive = false;
+            meta.slowBurnTargetCompleted = false;
+            meta.slowBurnRecoveryPending = false;
+        }
+    }
+    settings.armMode = 'always';
+    if (settings.featurePreset !== 'custom' && !FEATURE_PRESETS[settings.featurePreset]) settings.featurePreset = 'narrative';
+    settings.settingsSchemaVersion = 4;
+    // 상태 JSON은 짧으므로 과도한 출력 상한을 제한해 보조 호출 비용을 줄인다.
+    const refineTokens = Number(settings.refineMaxTokens);
+    settings.refineMaxTokens = Number.isFinite(refineTokens)
+        ? Math.min(4000, Math.max(1000, Math.round(refineTokens)))
+        : DEFAULT_SETTINGS.refineMaxTokens;
+    if (!Object.prototype.hasOwnProperty.call(SLOW_BURN_MIN_TURNS, settings.slowBurnIntensity)) settings.slowBurnIntensity = 'slow';
+    const dialogueWindow = Number(settings.dialogueWindow);
+    settings.dialogueWindow = Number.isFinite(dialogueWindow)
+        ? Math.min(6, Math.max(1, Math.round(dialogueWindow)))
+        : DIALOGUE_BEAT_WINDOW;
+    if (!settings.cardLinkSelected || typeof settings.cardLinkSelected !== 'object' || Array.isArray(settings.cardLinkSelected)) {
+        settings.cardLinkSelected = {};
+    }
+    if (previousSchemaVersion < 4 || settings.refineMaxTokens !== refineTokens) {
+        context.saveSettingsDebounced?.();
+    }
+    return settings;
+}
+
+function saveSettings() {
+    syncDiagnosticFetch();
+    syncStateTagDisplayGuard();
+    getContext().saveSettingsDebounced();
+}
+
+function setDeveloperMode(enabled) {
+    const settings = getSettings();
+    settings.developerMode = Boolean(enabled);
+
+    if (!settings.developerMode) {
+        const meta = getChatMeta(false);
+        if (meta) {
+            meta.slowBurnTargetActive = false;
+            meta.slowBurnTargetCompleted = false;
+            meta.slowBurnRecoveryPending = false;
+            saveChatMeta();
+        }
+    }
+    saveSettings();
+    updateUi();
+    toastr.success(
+        settings.developerMode ? '개발자 모드를 활성화했어요.' : '개발자 모드를 해제했어요.',
+        '🫧또또SFW',
+    );
+}
+
+function handleDeveloperTitleTap(event) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+
+    developerTapCount += 1;
+    clearTimeout(developerTapTimer);
+    developerTapTimer = setTimeout(() => {
+        developerTapCount = 0;
+        developerTapTimer = null;
+    }, DEVELOPER_TAP_RESET_MS);
+
+    if (developerTapCount < DEVELOPER_UNLOCK_TAPS) return;
+
+    developerTapCount = 0;
+    clearTimeout(developerTapTimer);
+    developerTapTimer = null;
+
+    const entered = window.prompt('개발자 모드 비밀번호를 입력하세요.');
+    if (entered === null) return;
+    if (entered.trim() !== DEVELOPER_PASSWORD) {
+        toastr.error('비밀번호가 올바르지 않아요.', '🫧또또SFW');
+        return;
+    }
+    setDeveloperMode(!getSettings().developerMode);
+}
+
+function getChatMeta(create = true) {
+    const context = getContext();
+    if (!context.chatMetadata || typeof context.chatMetadata !== 'object') return null;
+    let needsSave = false;
+    if (!context.chatMetadata[CHAT_STATE_KEY]) {
+        if (!create) return null;
+        context.chatMetadata[CHAT_STATE_KEY] = {
+            chatSchemaVersion: CHAT_STATE_SCHEMA_VERSION,
+            enabled: true,
+            manualState: null,
+            ignoredActs: [],
+            autoArmed: false,
+            slowBurnStageOverride: null,
+            slowBurnLocked: false,
+            slowBurnSessionActive: false,
+            slowBurnSessionStartAssistantCount: null,
+            slowBurnRecoveryPending: false,
+            slowBurnTarget: '',
+            slowBurnTargetTurns: 3,
+            slowBurnTargetActive: false,
+            slowBurnTargetCompleted: false,
+            ignoredDialogueBeats: [],
+            nsfwSuspended: false,
+            nsfwResumePending: false,
+            nsfwDelegatedAtAssistantCount: null,
+            nsfwDetectionCooldownFrom: 0,
+        };
+        needsSave = true;
+    }
+    const meta = context.chatMetadata[CHAT_STATE_KEY];
+    const previousChatSchemaVersion = Number(meta.chatSchemaVersion) || 0;
+    // 최초 업데이트 때만 기존 채팅의 사용 토글을 기본 ON으로 맞춘다.
+    // 이후 사용자가 직접 끈 값은 chatSchemaVersion이 남아 그대로 보존된다.
+    if (previousChatSchemaVersion < CHAT_STATE_SCHEMA_VERSION) {
+        meta.enabled = true;
+        meta.chatSchemaVersion = CHAT_STATE_SCHEMA_VERSION;
+        needsSave = true;
+    }
+    if (!Array.isArray(meta.ignoredActs)) meta.ignoredActs = [];
+    if (!Array.isArray(meta.ignoredDialogueBeats)) meta.ignoredDialogueBeats = [];
+    if (!Array.isArray(meta.customBans)) meta.customBans = [];
+    if (typeof meta.slowBurnTarget !== 'string') meta.slowBurnTarget = '';
+    meta.slowBurnTarget = sanitizeSlowBurnTarget(meta.slowBurnTarget);
+    meta.slowBurnTargetTurns = clampSlowBurnTargetTurns(meta.slowBurnTargetTurns);
+    meta.slowBurnTargetActive = Boolean(meta.slowBurnTargetActive && meta.slowBurnTarget);
+    meta.slowBurnTargetCompleted = Boolean(meta.slowBurnTargetCompleted && meta.slowBurnTarget);
+    meta.nsfwSuspended = Boolean(meta.nsfwSuspended);
+    meta.nsfwResumePending = Boolean(meta.nsfwResumePending);
+    const delegatedAt = meta.nsfwDelegatedAtAssistantCount === null || meta.nsfwDelegatedAtAssistantCount === undefined
+        ? NaN
+        : Number(meta.nsfwDelegatedAtAssistantCount);
+    meta.nsfwDelegatedAtAssistantCount = Number.isInteger(delegatedAt) && delegatedAt >= 0 ? delegatedAt : null;
+    const cooldownFrom = Number(meta.nsfwDetectionCooldownFrom);
+    meta.nsfwDetectionCooldownFrom = Number.isInteger(cooldownFrom) && cooldownFrom >= 0 ? cooldownFrom : 0;
+    if (needsSave) saveChatMeta();
+    return meta;
+}
+
+function saveChatMeta() {
+    const context = getContext();
+    if (typeof context.saveMetadataDebounced === 'function') context.saveMetadataDebounced();
+    else if (typeof context.saveMetadata === 'function') void context.saveMetadata();
+}
+
+// 감시 중: 이 채팅에서 확장이 동작할 조건이 다 켜져 있는 상태 (최소한 상태 태그는 수집)
+function isSupervising() {
+    const settings = getSettings();
+    const meta = getChatMeta(false);
+    return Boolean(runtimeActive && settings.enabled && meta?.enabled);
+}
+
+// 개입 중: 연속성·반복금지·진행 지시까지 전부 주입하는 상태
+function isFullyArmed() {
+    return Boolean(isSupervising() && !getChatMeta(false)?.nsfwSuspended
+        && !localNsfwBlocksSfw());
+}
+
+// ───────────────────────── NSFW 장면 자동 인계 ─────────────────────────
+
+function nsfwExtensionInstalled() {
+    const settings = getContext().extensionSettings?.[NSFW_SETTINGS_KEY];
+    return Boolean(settings && typeof settings === 'object');
+}
+
+function nsfwExtensionOwnsScene() {
+    if (!nsfwExtensionInstalled()) return false;
+    const bridge = globalThis.ttottoNsfwSceneBridge;
+    if (typeof bridge?.sync === 'function') {
+        try { return Boolean(bridge.sync()); }
+        catch (error) { console.debug(`${LOG_PREFIX} NSFW 동기화 실패 — 저장 상태로 확인`, error); }
+    }
+    // 구버전 NSFW와 함께 설치한 경우에는 기존 저장 상태 방식으로 호환한다.
+    const context = getContext();
+    const settings = context.extensionSettings?.[NSFW_SETTINGS_KEY];
+    const meta = context.chatMetadata?.[NSFW_CHAT_STATE_KEY];
+    if (!settings?.enabled || !settings?.adultConfirmed || !meta?.enabled) return false;
+    // 자동 모드에서는 무장 중이거나 해제 브릿지가 남아 있는 동안까지 NSFW판이 담당한다.
+    if (settings.armMode !== 'manual') return Boolean(meta.autoArmed || meta.bridgePending);
+    return true;
+}
+
+function stripDetectorTags(text) {
+    return stripStateTag(String(text ?? ''))
+        .replace(NSFW_STATE_TAG_REGEX, '')
+        .replace(/<scene_state\b[^>]*>[\s\S]*$/gi, '');
+}
+
+// With both extensions installed, only the NSFW owner's decision controls suspension.
+// Standalone SFW retains the local detector; it never changes NSFW settings.
+function localNsfwBlocksSfw() {
+    return !nsfwExtensionInstalled() && localNsfwWindowScore() >= localNsfwThreshold();
+}
+
+function localNsfwScore(text) {
+    const settings = getContext().extensionSettings?.[NSFW_SETTINGS_KEY];
+    return scoreScene(stripDetectorTags(text), settings?.enabled ? settings.stealthKeywords : '').score;
+}
+
+function localNsfwThreshold() {
+    const nsfwSettings = getContext().extensionSettings?.[NSFW_SETTINGS_KEY];
+    const sensitivity = nsfwSettings?.enabled ? String(nsfwSettings.stealthSensitivity ?? 'normal') : 'normal';
+    return NSFW_LOCAL_THRESHOLDS[sensitivity] ?? NSFW_LOCAL_THRESHOLDS.normal;
+}
+
+function recentConversationMessages(limit) {
+    const chat = Array.isArray(getContext().chat) ? getContext().chat : [];
+    return chat.filter((message) => message && !message.is_system).slice(-limit);
+}
+
+function localNsfwWindowScore() {
+    return recentConversationMessages(NSFW_LOCAL_WINDOW)
+        .reduce((total, message) => total + localNsfwScore(message.mes), 0);
+}
+
+function localNsfwColdStreak() {
+    const recent = recentConversationMessages(NSFW_COLD_STREAK);
+    return recent.length >= NSFW_COLD_STREAK
+        && !recent.some(isPendingAssistant)
+        && recent.every((message) => localNsfwScore(message.mes) === 0);
+}
+
+let rewriteGeneration = null;
+let generationEvents = [];
+let lastCompletedAssistant = null;
+
+function isPendingAssistant(message) {
+    return message && !message.is_user && !message.is_system
+        && /^(?:\s|\.{3}|…)*$/.test(String(message.mes ?? ''));
+}
+
+function beginSceneGeneration(type, fromEvent = false, dryRun = false) {
+    if (dryRun) return;
+    const normalized = normalizeGenerationType(type);
+    if (fromEvent) generationEvents.push(normalized);
+    if (!ALLOWED_GENERATION_TYPES.has(normalized)) return;
+    // SFW의 생성 훅이 먼저 실행되어도 NSFW가 해제 판정을 하기 전에 담당을 보존한다.
+    globalThis.ttottoNsfwSceneBridge?.beginGeneration?.(normalized);
+    if (normalized !== 'swipe' && normalized !== 'regenerate') {
+        rewriteGeneration = null;
+    } else {
+        const context = getContext();
+        const removedReply = normalized === 'regenerate' && lastCompletedAssistant
+            && lastCompletedAssistant.metadata === context.chatMetadata
+            && !context.chat?.includes(lastCompletedAssistant.message);
+        if (removedReply && getChatMeta(false)?.nsfwSuspended) {
+            rewriteGeneration = { metadata: context.chatMetadata };
+        }
+        if (syncNsfwSuspension()) rewriteGeneration = { metadata: context.chatMetadata };
+    }
+}
+
+function holdsRewriteGeneration() {
+    return Boolean(rewriteGeneration && runtimeActive && getSettings().enabled
+        && rewriteGeneration.metadata === getContext().chatMetadata && getChatMeta(false)?.enabled);
+}
+
+function finishSceneGeneration(type) {
+    const normalized = typeof type === 'string' ? normalizeGenerationType(type) : generationEvents.at(-1);
+    const index = generationEvents.lastIndexOf(normalized);
+    if (index >= 0) generationEvents.splice(index, 1);
+    if (normalized === 'quiet') return false;
+    rewriteGeneration = null;
+    return true;
+}
+
+function finishReceivedGeneration() {
+    rewriteGeneration = null;
+    generationEvents = generationEvents.filter((type) => type === 'quiet');
+}
+
+function infoPanelField(text, englishKey, koreanKey) {
+    const source = String(text ?? '');
+    const blocks = [...source.matchAll(/<Info_panel>([\s\S]*?)<\/Info_panel>/gi)].map((match) => match[1]);
+    let en = '';
+    let ko = '';
+    for (const block of blocks) {
+        const english = block.match(new RegExp(`\\[${englishKey}\\s*:\\s*([^\\]\\r\\n]+)`, 'i'));
+        const korean = block.match(new RegExp(`\\[${koreanKey}\\s*:\\s*([^\\]\\r\\n]+)`));
+        if (english?.[1]) en = english[1].trim();
+        if (korean?.[1]) ko = korean[1].trim();
+    }
+    if (!en && !ko) return '';
+    return { en: en || ko, ko: ko || en };
+}
+
+function latestCurrentSfwSnapshot() {
+    const message = assistantMessages().at(-1);
+    if (!message || isPendingAssistant(message)) return null;
+    const snapshot = snapshotForMessage(message);
+    return snapshotMatchesMessage(message, snapshot) ? snapshot : null;
+}
+
+function latestScenePanelState() {
+    const message = assistantMessages().at(-1);
+    if (!message || isPendingAssistant(message)) return null;
+    return sanitizeState({
+        location: infoPanelField(message.mes, 'Location', '장소'),
+        time: infoPanelField(message.mes, 'Date', '날짜'),
+        environment: infoPanelField(message.mes, 'Weather', '날씨'),
+    });
+}
+
+function resumeSfwFromLatest() {
+    const meta = getChatMeta(false);
+    if (!meta) return;
+    // Never promote an old NSFW heat-only report to a current SFW scene.
+    meta.manualState = null;
+    const snapshot = latestCurrentSfwSnapshot();
+    const current = parseStateFromText(assistantMessages().at(-1)?.mes) ?? snapshot?.state;
+    meta.nsfwResumePending = !current || stateCompletenessIssues(current).length > 0;
+    saveChatMeta();
+    if (meta.nsfwResumePending) scheduleAutoRefine();
+}
+
+function syncNsfwSuspension({ notify = false } = {}) {
+    const meta = getChatMeta(false);
+    if (!meta?.enabled) return false;
+
+    const delegated = nsfwExtensionOwnsScene();
+    const nsfwMeta = getContext().chatMetadata?.[NSFW_CHAT_STATE_KEY];
+    const immediateHandoff = Boolean(nsfwMeta?.sfwImmediateHandoff);
+    const assistantCount = assistantMessages().length;
+    if (delegated && meta.nsfwDelegatedAtAssistantCount !== assistantCount) {
+        meta.nsfwDelegatedAtAssistantCount = assistantCount;
+        saveChatMeta();
+    }
+    // NSFW판의 마지막 브릿지 생성과 SFW 복귀 주입이 같은 요청에 겹치지 않도록,
+    // NSFW판이 마지막으로 담당한 뒤 AI 응답 하나가 추가될 때까지 인계를 유지한다.
+    const delegationDraining = meta.nsfwSuspended
+        && !delegated
+        && !immediateHandoff
+        && Number.isInteger(meta.nsfwDelegatedAtAssistantCount)
+        && assistantCount <= meta.nsfwDelegatedAtAssistantCount;
+    // 함께 설치했을 때는 NSFW의 실제 담당 판정만 따른다.
+    // 단독 SFW에서만 로컬 감지와 두 메시지 해제 기준을 사용한다.
+    const detected = localNsfwBlocksSfw();
+    const localSuspended = !nsfwExtensionInstalled()
+        && (meta.nsfwSuspended ? !localNsfwColdStreak() : detected);
+    const shouldSuspend = holdsRewriteGeneration() || delegated || delegationDraining || localSuspended;
+
+    // Recover legacy handoff values without waiting for another generated reply.
+    if (!shouldSuspend && !meta.nsfwSuspended
+        && (meta.manualState?.source === 'nsfw-handoff' || meta.nsfwResumePending)) {
+        resumeSfwFromLatest();
+    }
+
+    if (shouldSuspend && !meta.nsfwSuspended) {
+        meta.nsfwSuspended = true;
+        clearTimeout(refineTimer);
+        refineTimer = null;
+        queuedRefineTarget = null;
+        refineAbortController?.abort();
+        meta.nsfwResumePending = false;
+        meta.bridgePending = false;
+        resetSlowBurnSession(meta);
+        saveChatMeta();
+        clearInjectedPrompt();
+        if (notify) toastr.info('NSFW 장면을 감지해 또또SFW는 잠시 대기해요.', '🫧또또SFW');
+    } else if (!shouldSuspend && meta.nsfwSuspended) {
+        meta.nsfwSuspended = false;
+        meta.nsfwDelegatedAtAssistantCount = null;
+        meta.nsfwDetectionCooldownFrom = Array.isArray(getContext().chat) ? getContext().chat.length : 0;
+        resumeSfwFromLatest();
+        if (notify) toastr.info('장면이 잦아들어 또또SFW가 다시 개입해요.', '🫧또또SFW');
+    }
+    return Boolean(meta.nsfwSuspended);
+}
+
+// ───────────────────────── 개입 시작/해제 ─────────────────────────
+
+// 원탭 개입 시작/해제. SFW는 낮은 강도의 일상 장면도 계속 추적하므로 채팅 토글 자체를 켜고 끈다.
+function forceToggleArm() {
+    const settings = getSettings();
+    if (!settings.enabled) {
+        toastr.warning('먼저 설정에서 전체 사용을 켜주세요.', '🫧또또SFW');
+        return;
+    }
+    const meta = getChatMeta();
+    const wasEnabled = Boolean(meta.enabled);
+    meta.enabled = !wasEnabled;
+    if (!meta.enabled) {
+        meta.bridgePending = Boolean(settings.exitBridge);
+        meta.nsfwSuspended = false;
+        meta.nsfwResumePending = false;
+        meta.nsfwDelegatedAtAssistantCount = null;
+        meta.nsfwDetectionCooldownFrom = 0;
+        resetSlowBurnSession(meta);
+    } else {
+        meta.bridgePending = false;
+        syncNsfwSuspension();
+    }
+    saveChatMeta();
+    if (meta.enabled && settings.slowBurnEnabled) startSlowBurnSessionIfNeeded();
+    toastr.info(meta.enabled ? '이 채팅에서 개입을 시작해요.' : '이 채팅에서 개입을 껐어요.', '🫧또또SFW');
+    updateUi();
+}
+
+// ───────────────────────── 상태 스냅샷 ─────────────────────────
+// 값은 이중 언어로 저장: 주입은 영어(en), UI 표시는 한국어(ko).
+// 태그에는 "English phrase || 한국어 구" 형식으로 오고, 구버전 데이터(단일 문자열)도 호환.
+
+function toBi(value) {
+    if (value && typeof value === 'object') {
+        return { en: String(value.en ?? '').trim().slice(0, SAFETY_LIMIT), ko: String(value.ko ?? '').trim().slice(0, SAFETY_LIMIT) };
+    }
+    const raw = String(value ?? '').trim().slice(0, SAFETY_LIMIT);
+    if (!raw) return { en: '', ko: '' };
+    const parts = raw.split(/\s*\|\|\s*/);
+    if (parts.length >= 2 && parts[0].trim() && parts[1].trim()) {
+        return { en: parts[0].trim(), ko: parts.slice(1).join(' ').trim() };
+    }
+    return { en: raw, ko: raw };
+}
+
+function biText(bi, lang = 'ko') {
+    if (!bi) return '';
+    if (typeof bi === 'string') return bi;
+    return bi[lang] || bi[lang === 'en' ? 'ko' : 'en'] || '';
+}
+
+function hasBi(bi) {
+    return Boolean(biText(bi, 'en') || biText(bi, 'ko'));
+}
+
+function sanitizeBiArray(value, limit = 8) {
+    return (Array.isArray(value) ? value : []).map(toBi).filter(hasBi).slice(0, limit);
+}
+
+function sanitizeState(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const clean = {
+        location: { en: '', ko: '' },
+        time: { en: '', ko: '' },
+        environment: { en: '', ko: '' },
+        importantObjects: {},
+        characters: {},
+        acts: [],
+        dialogueBeats: [],
+        dialogueReported: Object.prototype.hasOwnProperty.call(raw, 'dialogue_beats')
+            || Object.prototype.hasOwnProperty.call(raw, 'dialogueBeats'),
+        dialogueFlow: {
+            topic: { en: '', ko: '' },
+            lastQuestion: { en: '', ko: '' },
+            newFacts: [],
+        },
+        sceneType: 'general',
+        stage: null,
+    };
+    clean.location = toBi(raw.location);
+    clean.time = toBi(raw.time);
+    clean.environment = toBi(raw.environment);
+    const importantObjects = raw.important_objects && typeof raw.important_objects === 'object'
+        ? raw.important_objects
+        : raw.importantObjects && typeof raw.importantObjects === 'object' ? raw.importantObjects : {};
+    for (const [name, value] of Object.entries(importantObjects).slice(0, 32)) {
+        if (!name) continue;
+        const state = toBi(value);
+        if (hasBi(state)) clean.importantObjects[String(name).slice(0, 120)] = state;
+    }
+    const characters = raw.characters && typeof raw.characters === 'object' ? raw.characters : {};
+    for (const [name, info] of Object.entries(characters).slice(0, 64)) {
+        if (!name || typeof info !== 'object' || info === null) continue;
+        clean.characters[String(name).slice(0, SAFETY_LIMIT)] = {
+            appearance: toBi(info.appearance),
+            position: toBi(info.position),
+            holding: toBi(info.holding),
+            condition: toBi(info.condition),
+        };
+    }
+    const acts = Array.isArray(raw.acts) ? raw.acts : [];
+    clean.acts = acts.map(toBi).filter(hasBi).slice(0, 64);
+    const dialogueBeats = Array.isArray(raw.dialogue_beats)
+        ? raw.dialogue_beats
+        : Array.isArray(raw.dialogueBeats) ? raw.dialogueBeats : [];
+    clean.dialogueBeats = dialogueBeats.map(toBi).filter(hasBi).slice(0, 4);
+    const dialogueFlow = raw.dialogue_flow && typeof raw.dialogue_flow === 'object'
+        ? raw.dialogue_flow
+        : raw.dialogueFlow && typeof raw.dialogueFlow === 'object' ? raw.dialogueFlow : {};
+    clean.dialogueFlow = {
+        topic: toBi(dialogueFlow.topic),
+        lastQuestion: toBi(dialogueFlow.last_question ?? dialogueFlow.lastQuestion),
+        newFacts: sanitizeBiArray(dialogueFlow.new_facts ?? dialogueFlow.newFacts, 3),
+    };
+    clean.sceneType = SCENE_TYPE_KEYS.has(String(raw.scene_type ?? raw.sceneType))
+        ? String(raw.scene_type ?? raw.sceneType)
+        : 'general';
+    const intensity = raw.intensity === null || raw.intensity === undefined || String(raw.intensity).trim() === ''
+        ? NaN : Number(raw.intensity);
+    clean.intensity = Number.isFinite(intensity) ? Math.max(0, Math.min(10, Math.round(intensity))) : null;
+    const stage = raw.stage === null || raw.stage === undefined ? NaN : Number(raw.stage);
+    clean.stage = Number.isFinite(stage) ? Math.max(1, Math.min(6, Math.round(stage))) : null;
+    const next = Array.isArray(raw.next) ? raw.next : [];
+    clean.next = next.map(toBi).filter(hasBi).slice(0, 8);
+    const hasCharacters = Object.values(clean.characters).some((info) => hasBi(info.appearance) || hasBi(info.position) || hasBi(info.holding) || hasBi(info.condition));
+    const hasDialogueFlow = hasBi(clean.dialogueFlow.topic) || hasBi(clean.dialogueFlow.lastQuestion) || clean.dialogueFlow.newFacts.length > 0;
+    if (!hasBi(clean.location) && !hasBi(clean.time) && !hasBi(clean.environment)
+        && !Object.keys(clean.importantObjects).length && !hasCharacters && !clean.acts.length
+        && !clean.dialogueBeats.length && !hasDialogueFlow && clean.intensity === null
+        && clean.stage === null && !clean.next.length) return null;
+    return clean;
+}
+
+function stateCompletenessIssues(state, settings = getSettings()) {
+    if (!state) return ['state'];
+    const issues = [];
+    if (!hasBi(state.location)) issues.push('location');
+    const hasCharacterState = Object.values(state.characters ?? {}).some(
+        (info) => hasBi(info.appearance) || hasBi(info.position) || hasBi(info.holding) || hasBi(info.condition),
+    );
+    if (!hasCharacterState) issues.push('characters');
+    if (settings.repeatGuard && !state.acts?.length) issues.push('acts');
+    if (state.intensity === null || state.intensity === undefined) issues.push('intensity');
+    if (settings.slowBurnEnabled && (state.stage === null || state.stage === undefined)) issues.push('stage');
+    if (settings.nextBeatHints && !state.next?.length) issues.push('next');
+    return issues;
+}
+
+// 모델이 JSON 문자열 안에 실제 줄바꿈/탭을 넣은 경우에만 표기를 복구한다.
+// 값·따옴표·키·잘린 구조는 추측해서 변경하지 않는다. 정상 JSON은 그대로 파싱한다.
+function parseStateJson(text) {
+    const source = String(text ?? '');
+    try {
+        return JSON.parse(source);
+    } catch (originalError) {
+        let inString = false;
+        let escaped = false;
+        let repaired = '';
+        let changed = false;
+        for (const char of source) {
+            const code = char.charCodeAt(0);
+            if (inString && code < 0x20) {
+                // 직전의 역슬래시는 이미 출력했으므로 겹치지 않게 한다.
+                repaired += (escaped ? '' : '\\') + `u${code.toString(16).padStart(4, '0')}`;
+                escaped = false;
+                changed = true;
+                continue;
+            }
+            repaired += char;
+            if (!inString) {
+                if (char === '"') inString = true;
+            } else if (escaped) {
+                escaped = false;
+            } else if (char === '\\') {
+                escaped = true;
+            } else if (char === '"') {
+                inString = false;
+            }
+        }
+        if (!changed) throw originalError;
+        return JSON.parse(repaired);
+    }
+}
+
+function parseStateFromText(text) {
+    const source = String(text ?? '');
+    let lastJson = null;
+    for (const match of source.matchAll(STATE_TAG_REGEX)) lastJson = match[1];
+    if (!lastJson) return null;
+    const start = lastJson.indexOf('{');
+    const end = lastJson.lastIndexOf('}');
+    if (start < 0 || end <= start) return null;
+    try {
+        return sanitizeState(parseStateJson(lastJson.slice(start, end + 1)));
+    } catch {
+        return null;
+    }
+}
+
+function stripStateTag(text) {
+    const source = String(text ?? '');
+    const withoutTrailingAck = source.replace(STATE_TRAILING_ACK_REGEX, '$1');
+    const cleaned = withoutTrailingAck
+        .replace(STATE_TAG_LOOSE_REGEX, '')
+        .replace(STATE_TAG_REGEX, '')
+        // 스트리밍 중 잘렸거나 모델이 닫는 태그를 누락한 경우에도 기계용 내용이 본문에 노출되지 않게 제거한다.
+        .replace(/```(?:json)?\s*<sfw_scene\b[^>]*>[\s\S]*$/gi, '')
+        .replace(/<sfw_scene\b[^>]*>[\s\S]*$/gi, '')
+        .replace(/<\/sfw_scene>\s*```/gi, '')
+        .replace(/<\/sfw_scene>/gi, '');
+    return cleaned
+        .replace(/\n{3,}$/g, '\n')
+        .replace(/[ \t]+$/g, '')
+        .trimEnd();
+}
+
+function getMessageStore(message, create = true) {
+    if (!message) return null;
+    if (!message.extra || typeof message.extra !== 'object') {
+        if (!create) return null;
+        message.extra = {};
+    }
+    if (!message.extra[MESSAGE_EXTRA_KEY]) {
+        if (!create) return null;
+        message.extra[MESSAGE_EXTRA_KEY] = { swipes: {} };
+    }
+    const store = message.extra[MESSAGE_EXTRA_KEY];
+    if (!store.swipes || typeof store.swipes !== 'object') store.swipes = {};
+    return store;
+}
+
+function currentSwipeIndex(message) {
+    return Number.isInteger(message?.swipe_id) ? message.swipe_id : 0;
+}
+
+function legacyMessageStateSignature(message) {
+    const swipeIndex = currentSwipeIndex(message);
+    const fullText = stripDetectorTags(message?.mes);
+    const translationMarker = fullText.search(/\r?\n\s*번역문\s*\r?\n/i);
+    const text = translationMarker >= 0 ? fullText.slice(0, translationMarker) : fullText;
+    return `${swipeIndex}:${text.length}:${messageTextHash(text)}`;
+}
+
+// Compare narrative bodies independently of either extension's machine report.
+// Keep substantive edits significant; normalize only known report wrappers,
+// line endings, trailing spaces, and the established appended-translation marker.
+function canonicalSceneBody(text) {
+    const clean = String(text ?? '')
+        .replace(/(<\/(?:scene_state|sfw_scene)>[ \t]*(?:\r?\n[ \t]*```)?)[ \t\r\n]+(?:no\s+changes?|unchanged)[ \t]*[.!]?[ \t]*$/i, '$1')
+        .replace(/```(?:json)?\s*<(scene_state|sfw_scene)\b[^>]*>[\s\S]*?<\/\1>\s*```/gi, '')
+        .replace(/<(scene_state|sfw_scene)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
+        .replace(/```(?:json)?\s*<(?:scene_state|sfw_scene)\b[^>]*>[\s\S]*$/gi, '')
+        .replace(/<(?:scene_state|sfw_scene)\b[^>]*>[\s\S]*$/gi, '')
+        .replace(/<\/(?:scene_state|sfw_scene)>\s*```/gi, '')
+        .replace(/<\/(?:scene_state|sfw_scene)>/gi, '');
+    const marker = clean.search(/\r?\n\s*번역문\s*\r?\n/i);
+    return (marker >= 0 ? clean.slice(0, marker) : clean)
+        .replace(/\r\n?/g, '\n').replace(/[ \t]+$/gm, '').trimEnd();
+}
+
+function stateRecordBody(text) {
+    return canonicalSceneBody(text);
+}
+
+function messageStateSignature(message) {
+    const text = stateRecordBody(message?.mes);
+    return `${currentSwipeIndex(message)}:${text.length}:${messageTextHash(text)}`;
+}
+
+function snapshotMatchesMessage(message, snapshot = snapshotForMessage(message)) {
+    if (!snapshot?.state) return false;
+    return snapshot.messageSignature === messageStateSignature(message)
+        || (snapshot.signatureVersion !== 2 && snapshot.messageSignature === legacyMessageStateSignature(message));
+}
+
+function diagnosticCache(message) {
+    const snapshot = snapshotForMessage(message);
+    return {
+        saved: Boolean(snapshot?.state), cached: snapshotMatchesMessage(message, snapshot),
+        bodyChars: stateRecordBody(message?.mes).length,
+        savedBodyChars: Number(String(snapshot?.messageSignature ?? '').split(':')[1] ?? -1),
+        savedCharacters: Object.keys(snapshot?.state?.characters ?? {}).length,
+        savedObjects: Object.keys(snapshot?.state?.importantObjects ?? {}).length,
+        savedNextCandidates: snapshot?.state?.next?.length ?? 0,
+        legacySignature: Boolean(snapshot && snapshot.signatureVersion !== 2),
+    };
+}
+
+function snapshotForMessage(message) {
+    const store = getMessageStore(message, false);
+    if (!store) return null;
+    return store.swipes[String(currentSwipeIndex(message))] ?? null;
+}
+
+// AI 메시지에서 상태 태그를 추출·저장하고 본문에서 제거. 변경 여부를 반환.
+function harvestMessage(message) {
+    if (!message || message.is_user || message.is_system) return { changed: false, found: false, state: null };
+    const swipeIndex = currentSwipeIndex(message);
+    let changed = false;
+    let found = false;
+
+    const state = parseStateFromText(message.mes);
+    const strippedMes = stripStateTag(message.mes);
+    if (strippedMes !== message.mes) {
+        message.mes = strippedMes;
+        changed = true;
+    }
+    if (Array.isArray(message.swipes) && typeof message.swipes[swipeIndex] === 'string') {
+        const strippedSwipe = stripStateTag(message.swipes[swipeIndex]);
+        if (strippedSwipe !== message.swipes[swipeIndex]) {
+            message.swipes[swipeIndex] = strippedSwipe;
+            changed = true;
+        }
+    }
+    const signature = messageStateSignature(message);
+    if (state) {
+        // 일반 태그 수신에도 원문의 날짜·시각을 우선한다. 추가 AI 호출 없음.
+        const panelTime = infoPanelField(message.mes, 'Date', '날짜');
+        if (panelTime) state.time = toBi(panelTime);
+        const store = getMessageStore(message);
+        store.swipes[String(swipeIndex)] = { state, at: Date.now(), messageSignature: signature, signatureVersion: 2 };
+        found = true;
+    } else {
+        const snapshot = snapshotForMessage(message);
+        found = snapshotMatchesMessage(message, snapshot);
+    }
+    return { changed, found, state };
+}
+
+function assistantMessages() {
+    const chat = Array.isArray(getContext().chat) ? getContext().chat : [];
+    return chat.filter((message) => message && !message.is_user && !message.is_system);
+}
+
+function currentStateTarget(message = assistantMessages().at(-1)) {
+    if (!message || isPendingAssistant(message)) return null;
+    return { index: getContext().chat.indexOf(message), swipe: currentSwipeIndex(message), signature: messageStateSignature(message) };
+}
+
+function manualMatchesLatest(manual, message, snapshot) {
+    const target = currentStateTarget(message);
+    if (!manual?.state || !target) return false;
+    if (manual.target) return manual.target.index === target.index && manual.target.swipe === target.swipe
+        && manual.target.signature === target.signature;
+    // Old AI repairs already have a matching message snapshot; unbound manual
+    // records cannot silently override a newer reply or a different swipe.
+    return manual.source === 'ai-refine' && snapshotMatchesMessage(message, snapshot)
+        && manual.at === snapshot.at;
+}
+
+// Current scene facts belong to the latest selected reply, never an older one.
+function effectiveState() {
+    const meta = getChatMeta(false);
+    if (meta?.nsfwResumePending || meta?.manualState?.source === 'nsfw-handoff') {
+        return { state: latestCurrentSfwSnapshot()?.state ?? latestScenePanelState(), source: 'nsfw-resume' };
+    }
+    const message = assistantMessages().at(-1);
+    if (!message || isPendingAssistant(message)) return { state: null, source: 'none' };
+    const snapshot = snapshotForMessage(message);
+    const valid = snapshotMatchesMessage(message, snapshot);
+    const manual = meta?.manualState;
+    if (manualMatchesLatest(manual, message, snapshot)
+        && (!valid || Number(manual.at ?? 0) >= Number(snapshot.at ?? 0))) {
+        return { state: manual.state, source: manual.source ?? 'manual' };
+    }
+    if (valid) return { state: snapshot.state, source: 'tag' };
+    return { state: latestScenePanelState(), source: snapshot?.state ? 'body-changed' : 'missing-report' };
+}
+
+// Keep the saved report inspectable after an unknown body transformation. It is
+// explicitly unverified and must not become current prompt state by this route.
+function stateForDisplay() {
+    const current = effectiveState();
+    const meta = getChatMeta(false);
+    if (meta?.nsfwSuspended || meta?.nsfwResumePending || ['manual', 'ai-refine'].includes(current.source)) return current;
+    const message = assistantMessages().at(-1);
+    const snapshot = snapshotForMessage(message);
+    if (snapshot?.state && !isPendingAssistant(message) && !snapshotMatchesMessage(message, snapshot)) {
+        return { state: snapshot.state, source: 'body-changed' };
+    }
+    return current;
+}
+
+function ignoredActSet() {
+    const meta = getChatMeta(false);
+    return new Set((meta?.ignoredActs ?? []).map((act) => String(act).toLocaleLowerCase()));
+}
+
+function isActIgnored(act, ignored) {
+    return ignored.has(biText(act, 'en').toLocaleLowerCase()) || ignored.has(biText(act, 'ko').toLocaleLowerCase());
+}
+
+function ignoredDialogueBeatSet() {
+    const meta = getChatMeta(false);
+    return new Set((meta?.ignoredDialogueBeats ?? []).map((beat) => String(beat).toLocaleLowerCase()));
+}
+
+function isDialogueBeatIgnored(beat, ignored) {
+    return ignored.has(biText(beat, 'en').toLocaleLowerCase()) || ignored.has(biText(beat, 'ko').toLocaleLowerCase());
+}
+
+const ACT_STOP_WORDS = new Set([
+    'a', 'an', 'the', 'to', 'of', 'and', 'with', 'her', 'his', 'their', 'she', 'he', 'they',
+    '그', '그녀', '그의', '그녀의', '서로', '에게', '으로', '에서', '하다', '한다', '하며',
+]);
+
+function normalizeActText(value) {
+    return String(value ?? '')
+        .normalize('NFKC')
+        .toLocaleLowerCase()
+        .replace(/\b(kissing|kissed|kisses)\b/g, 'kiss')
+        .replace(/\b(touching|touched|touches)\b/g, 'touch')
+        .replace(/\b(licking|licked|licks)\b/g, 'lick')
+        .replace(/\b(holding|held|holds)\b/g, 'hold')
+        .replace(/\b(pulling|pulled|pulls)\b/g, 'pull')
+        .replace(/\b(pressing|pressed|presses)\b/g, 'press')
+        .replace(/\b(caressing|caressed|caresses)\b/g, 'caress')
+        .replace(/입(?:을|술을)?\s*(?:맞추\S*|맞대\S*)|입맞춤/g, '키스')
+        .replace(/끌어안\S*|껴안\S*/g, '포옹')
+        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+        .split(/\s+/)
+        .filter((token) => token && !ACT_STOP_WORDS.has(token))
+        .join(' ');
+}
+
+function actVariants(act) {
+    return [...new Set([biText(act, 'en'), biText(act, 'ko')].map(normalizeActText).filter(Boolean))];
+}
+
+function normalizedTextsSimilar(left, right) {
+    if (!left || !right) return false;
+    if (left === right) return true;
+    if (Math.min(left.length, right.length) >= 8 && (left.includes(right) || right.includes(left))) return true;
+    const leftTokens = new Set(left.split(' '));
+    const rightTokens = new Set(right.split(' '));
+    const smaller = Math.min(leftTokens.size, rightTokens.size);
+    if (smaller < 2) return false;
+    const overlap = [...leftTokens].filter((token) => rightTokens.has(token)).length;
+    return overlap / smaller >= 0.72;
+}
+
+function actsAreSimilar(left, right) {
+    return actVariants(left).some((a) => actVariants(right).some((b) => normalizedTextsSimilar(a, b)));
+}
+
+function actMatchesPlainBan(act, ban) {
+    const normalizedBan = normalizeActText(ban);
+    if (!normalizedBan) return false;
+    return actVariants(act).some((variant) => normalizedTextsSimilar(variant, normalizedBan));
+}
+
+// 최근 N턴의 전개(행위) 목록 — 오래된 것 → 최신 순.
+// 총량이 maxBannedActs를 넘으면 오래된 것부터 잘라서 주입문 비대화를 막는다.
+function recentActs(windowSize) {
+    if (!getSettings().repeatGuard) return [];
+    const ignored = ignoredActSet();
+    // 먼저 최근 AI 답변 N개로 범위를 고정한다. 태그가 누락된 답변이 있어도
+    // 더 오래된 메시지까지 거슬러 올라가 반복 금지 대상으로 삼지 않는다.
+    const limit = Math.max(1, Number(windowSize) || DEFAULT_SETTINGS.repeatWindow);
+    const messages = assistantMessages().slice(-limit);
+    const rows = [];
+    for (let i = 0; i < messages.length; i++) {
+        const snapshot = snapshotForMessage(messages[i]);
+        if (!snapshot?.state?.acts?.length || !snapshotMatchesMessage(messages[i], snapshot)) continue;
+        const acts = snapshot.state.acts.filter((act) => !isActIgnored(act, ignored));
+        if (acts.length) rows.push({ turnsAgo: messages.length - i, acts });
+    }
+    // 중복 제거 (같은 전개가 여러 턴에 반복 기록된 경우 최신 것만)
+    const seenActs = [];
+    for (let i = rows.length - 1; i >= 0; i--) {
+        rows[i].acts = rows[i].acts.filter((act) => {
+            if (seenActs.some((seen) => actsAreSimilar(act, seen))) return false;
+            seenActs.push(act);
+            return true;
+        });
+    }
+    // 총량 상한: 오래된 것부터 제거
+    const max = Math.max(3, Number(getSettings().maxBannedActs) || DEFAULT_SETTINGS.maxBannedActs);
+    let total = rows.reduce((sum, row) => sum + row.acts.length, 0);
+    while (total > max && rows.length) {
+        const first = rows[0];
+        const drop = Math.min(first.acts.length, total - max);
+        first.acts = first.acts.slice(drop);
+        total -= drop;
+        if (!first.acts.length) rows.shift();
+    }
+    return rows.filter((row) => row.acts.length);
+}
+
+// 실험실: 최근 2개의 AI 답변에서 사용한 대사의 목적·기능. 같은 의도는 최신 항목만 남긴다.
+function recentDialogueBeats(windowSize = Number(getSettings().dialogueWindow) || DIALOGUE_BEAT_WINDOW) {
+    const ignored = ignoredDialogueBeatSet();
+    const messages = assistantMessages().slice(-Math.max(1, windowSize));
+    const rows = [];
+    for (const message of messages) {
+        const snapshot = snapshotForMessage(message);
+        if (!snapshot?.state?.dialogueBeats?.length || !snapshotMatchesMessage(message, snapshot)) continue;
+        const beats = snapshot.state.dialogueBeats.filter((beat) => !isDialogueBeatIgnored(beat, ignored));
+        if (beats.length) rows.push({ beats });
+    }
+    const seen = [];
+    for (let i = rows.length - 1; i >= 0; i--) {
+        rows[i].beats = rows[i].beats.filter((beat) => {
+            if (seen.some((item) => actsAreSimilar(beat, item))) return false;
+            seen.push(beat);
+            return true;
+        });
+    }
+    return rows.filter((row) => row.beats.length);
+}
+
+// ───────────────────────── CardInject 연동 ─────────────────────────
+// CardInject가 캐릭터별로 저장한 카테고리(extensionSettings.cardinject.perChar[캐릭터키].categories)를
+// 읽기 전용으로 참조한다. CardInject 쪽 코드는 건드리지 않는다.
+// 용도: 다음 전개 힌트를 만들 때 캐릭터 시트의 성향·취향 카테고리를 참고 자료로 쓴다.
+// 같은 카테고리를 CardInject에서 꺼두면(enabled 해제) 이 확장이 "개입 중에만" 주입하게 된다.
+const CARD_LINK_STORE_KEY = 'cardinject';
+const CARD_LINK_CHAR_LIMIT = 2500; // 참고 자료 총량 상한 (주입문 비대화 방지)
+const CARD_LINK_HINT_RE = /preference|characteristic|habit|personality|성향|취향|선호|특징|습관|성격/i;
+
+// 지금 채팅의 캐릭터들 (그룹 채팅이면 멤버 전체). CardInject와 같은 키 규칙: avatar 우선, 없으면 name.
+function activeCharacterEntries() {
+    const context = getContext();
+    const characters = Array.isArray(context.characters) ? context.characters : [];
+    const entries = [];
+    const push = (char) => {
+        if (!char) return;
+        const key = char.avatar || char.name;
+        if (!key || entries.some((entry) => entry.key === key)) return;
+        entries.push({ key: String(key), name: String(char.name || key) });
+    };
+    const groupId = context.groupId;
+    if (groupId !== null && groupId !== undefined && groupId !== '') {
+        const group = (Array.isArray(context.groups) ? context.groups : []).find((item) => String(item?.id) === String(groupId));
+        for (const member of group?.members ?? []) push(characters.find((char) => char?.avatar === member));
+    } else {
+        const id = Number(context.characterId);
+        if (Number.isInteger(id)) push(characters[id]);
+    }
+    return entries;
+}
+
+// CardInject에 저장된 카테고리 목록 (내용이 있는 것만)
+function cardLinkOptions() {
+    const store = getContext().extensionSettings?.[CARD_LINK_STORE_KEY];
+    if (!store || typeof store !== 'object' || !store.perChar || typeof store.perChar !== 'object') {
+        return { available: false, rows: [] };
+    }
+    const rows = [];
+    for (const entry of activeCharacterEntries()) {
+        const categories = store.perChar[entry.key]?.categories;
+        if (!Array.isArray(categories)) continue;
+        for (const category of categories) {
+            const content = String(category?.content ?? '').trim();
+            if (!category?.key || !content) continue;
+            const name = String(category.name || category.key);
+            rows.push({
+                charKey: entry.key,
+                charName: entry.name,
+                catKey: String(category.key),
+                name,
+                content,
+                ciEnabled: Boolean(category.enabled),
+                likely: CARD_LINK_HINT_RE.test(name),
+            });
+        }
+    }
+    return { available: true, rows };
+}
+
+// CardInject 내용에는 {{char}}/{{user}} 매크로가 그대로 들어 있으므로 주입 전에 풀어준다.
+function resolveCardMacros(text, charName) {
+    const context = getContext();
+    const userName = String(context.name1 ?? 'User');
+    let out = String(text ?? '');
+    try {
+        if (typeof context.substituteParams === 'function') out = context.substituteParams(out, userName, charName);
+    } catch (error) {
+        console.debug(`${LOG_PREFIX} 매크로 치환 생략`, error);
+    }
+    return out
+        .replace(/\{\{char\}\}/gi, charName)
+        .replace(/\{\{user\}\}/gi, userName);
+}
+
+// 선택된 카테고리를 "- 이름 — 카테고리: 내용" 줄 목록으로. 총량 상한을 넘으면 잘라낸다.
+function cardLinkPreferenceText() {
+    const settings = getSettings();
+    if (!settings.cardLinkEnabled) return '';
+    const selected = settings.cardLinkSelected ?? {};
+    const { rows } = cardLinkOptions();
+    const lines = [];
+    let total = 0;
+    for (const row of rows) {
+        if (!Array.isArray(selected[row.charKey]) || !selected[row.charKey].includes(row.catKey)) continue;
+        const body = resolveCardMacros(row.content, row.charName).replace(/\s*\n\s*/g, ' ').trim();
+        if (!body) continue;
+        let line = `- ${row.charName} — ${row.name}: ${body}`;
+        const remaining = CARD_LINK_CHAR_LIMIT - total;
+        if (remaining <= 40) break;
+        if (line.length > remaining) line = `${line.slice(0, remaining - 1)}…`;
+        lines.push(line);
+        total += line.length + 1;
+    }
+    return lines.join('\n');
+}
+
+function buildCardPreferenceLines() {
+    const text = cardLinkPreferenceText();
+    if (!text) return [];
+    return [
+        'CHARACTER PREFERENCES (from the character sheet — inspiration for choosing what happens next, not a checklist. Never force them, and never contradict the current scene state, hard limits, or user-banned items):',
+        text,
+    ];
+}
+
+// ───────────────────────── 주입문 생성 ─────────────────────────
+
+function buildStateLines(state) {
+    const lines = [];
+    if (hasBi(state.location)) lines.push(`- Location: ${biText(state.location, 'en')}`);
+    if (hasBi(state.time)) lines.push(`- Time/context: ${biText(state.time, 'en')}`);
+    if (hasBi(state.environment)) lines.push(`- Environment: ${biText(state.environment, 'en')}`);
+    for (const [name, objectState] of Object.entries(state.importantObjects ?? {})) {
+        if (hasBi(objectState)) lines.push(`- Important object "${name}": ${biText(objectState, 'en')}`);
+    }
+    for (const [name, info] of Object.entries(state.characters)) {
+        const parts = [];
+        if (hasBi(info.appearance)) parts.push(`appearance: ${biText(info.appearance, 'en')}`);
+        if (hasBi(info.position)) parts.push(`position/posture: ${biText(info.position, 'en')}`);
+        if (hasBi(info.holding)) parts.push(`holding/carrying: ${biText(info.holding, 'en')}`);
+        if (hasBi(info.condition)) parts.push(`physical condition: ${biText(info.condition, 'en')}`);
+        if (parts.length) lines.push(`- ${name} — ${parts.join('; ')}`);
+    }
+    if (getSettings().dialogueFlow) {
+        if (hasBi(state.dialogueFlow?.topic)) lines.push(`- Current conversation topic: ${biText(state.dialogueFlow.topic, 'en')}`);
+        if (hasBi(state.dialogueFlow?.lastQuestion)) lines.push(`- Most recent direct question awaiting a response: ${biText(state.dialogueFlow.lastQuestion, 'en')}`);
+        if (state.dialogueFlow?.newFacts?.length) {
+            lines.push(`- Newly established facts: ${state.dialogueFlow.newFacts.map((fact) => biText(fact, 'en')).join('; ')}`);
+        }
+    }
+    lines.push(`- Scene type: ${state.sceneType || 'general'} (${sceneTypeDef(state.sceneType).ko})`);
+    return lines;
+}
+
+// Future suggestions expire with their reply. Unlike continuity facts, they
+// must never fall back to a report from an older message or another swipe.
+function nextBeatReport({ forDisplay = false } = {}) {
+    const meta = getChatMeta(false);
+    const message = assistantMessages().at(-1);
+    if (meta?.nsfwSuspended || !message || isPendingAssistant(message)) return { state: null, source: 'none' };
+    const snapshot = snapshotForMessage(message);
+    if (snapshotMatchesMessage(message, snapshot)) return { state: snapshot.state, source: 'tag' };
+    if (forDisplay && snapshot?.state) return { state: snapshot.state, source: 'body-changed' };
+    return { state: null, source: 'none' };
+}
+
+// 최신 답변의 후보만 필터링한다. 미검증 저장값은 화면에서만 확인한다.
+function nextBeatCandidates(options = {}) {
+    const ignored = ignoredActSet();
+    const { state } = nextBeatReport(options);
+    if (!state?.next?.length) return [];
+    const settings = getSettings();
+    const bannedActs = recentActs(Number(settings.repeatWindow) || DEFAULT_SETTINGS.repeatWindow)
+        .flatMap((row) => row.acts);
+    const customBans = [
+        ...(getChatMeta(false)?.customBans ?? []),
+        ...(getSettings().globalBans ?? []),
+    ].map(String).filter(Boolean);
+    const newFacts = state.dialogueFlow?.newFacts ?? [];
+    const accepted = [];
+    for (const beat of state.next) {
+        if (isActIgnored(beat, ignored)) continue;
+        if (customBans.some((ban) => actMatchesPlainBan(beat, ban))) continue;
+        if (bannedActs.some((act) => actsAreSimilar(beat, act))) continue;
+        if (newFacts.some((fact) => actsAreSimilar(beat, fact))) continue;
+        if (accepted.some((candidate) => actsAreSimilar(beat, candidate))) continue;
+        accepted.push(beat);
+    }
+    return accepted;
+}
+
+// 진행 속도 결정 — 'auto'면 강도 곡선이 지휘: 고조되는 중(~7)엔 전진, 절정 직전(8~9)엔 가속, 정점(10)엔 유지·심화
+function resolvePace(settings, state) {
+    if (settings.paceMode !== 'auto') {
+        return PACE_INSTRUCTIONS[settings.paceMode] ?? PACE_INSTRUCTIONS.slow;
+    }
+    const intensity = Number(state?.intensity);
+    if (!Number.isFinite(intensity)) return PACE_INSTRUCTIONS.slow;
+    if (intensity >= 10) return PACE_INSTRUCTIONS.hold;
+    if (intensity >= 8) return PACE_INSTRUCTIONS.push;
+    return PACE_INSTRUCTIONS.slow;
+}
+
+function stageFromState(state) {
+    const reported = state?.stage === null || state?.stage === undefined ? NaN : Number(state.stage);
+    if (Number.isFinite(reported)) return Math.max(1, Math.min(6, Math.round(reported)));
+    const intensity = Number(state?.intensity);
+    if (!Number.isFinite(intensity)) return 1;
+    if (intensity >= 10) return 6;
+    if (intensity >= 8) return 5;
+    if (intensity >= 7) return 4;
+    if (intensity >= 5) return 3;
+    if (intensity >= 3) return 2;
+    return 1;
+}
+
+function slowBurnStageInfo() {
+    const meta = getChatMeta(false);
+    const override = Number(meta?.slowBurnStageOverride);
+    if (Number.isFinite(override) && override >= 1 && override <= 6) {
+        return { stage: Math.round(override), source: 'manual' };
+    }
+    const { state } = effectiveState();
+    if (state?.stage !== null && state?.stage !== undefined && Number.isFinite(Number(state.stage))) {
+        return { stage: stageFromState(state), source: 'reported' };
+    }
+    if (state?.intensity !== null && state?.intensity !== undefined && Number.isFinite(Number(state.intensity))) {
+        return { stage: stageFromState(state), source: 'intensity' };
+    }
+    return { stage: 1, source: 'default' };
+}
+
+function sanitizeSlowBurnTarget(value) {
+    return String(value ?? '')
+        .replace(/[\r\n\t]+/g, ' ')
+        .replace(/\s{2,}/g, ' ')
+        .trim()
+        .slice(0, SLOW_BURN_TARGET_MAX_LENGTH);
+}
+
+function clampSlowBurnTargetTurns(value) {
+    return Math.max(1, Math.min(SLOW_BURN_TARGET_MAX_TURNS, Math.round(Number(value) || 3)));
+}
+
+function resetSlowBurnSession(meta = getChatMeta(false)) {
+    if (!meta) return;
+    meta.slowBurnSessionActive = false;
+    meta.slowBurnSessionStartAssistantCount = null;
+    meta.slowBurnRecoveryPending = false;
+    meta.slowBurnTargetActive = false;
+}
+
+function startSlowBurnSessionIfNeeded() {
+    const settings = getSettings();
+    const meta = getChatMeta(false);
+    if (!settings.slowBurnEnabled || !meta || !isFullyArmed() || meta.slowBurnSessionActive) return false;
+    meta.slowBurnSessionActive = true;
+    meta.slowBurnSessionStartAssistantCount = assistantMessages().length;
+    meta.slowBurnRecoveryPending = false;
+    saveChatMeta();
+    return true;
+}
+
+function slowBurnSessionStartCount() {
+    const meta = getChatMeta(false);
+    const count = Number(meta?.slowBurnSessionStartAssistantCount);
+    if (meta?.slowBurnSessionActive && Number.isInteger(count) && count >= 0) return count;
+    return assistantMessages().length;
+}
+
+function slowBurnTargetProgress() {
+    const meta = getChatMeta(false);
+    const developerMode = Boolean(getSettings().developerMode);
+    const target = sanitizeSlowBurnTarget(meta?.slowBurnTarget);
+    const requiredTurns = clampSlowBurnTargetTurns(meta?.slowBurnTargetTurns);
+    const completedTurns = meta?.slowBurnSessionActive
+        ? Math.max(0, assistantMessages().length - slowBurnSessionStartCount())
+        : 0;
+    const active = Boolean(developerMode && meta?.slowBurnTargetActive && target && meta?.slowBurnSessionActive);
+    return {
+        target,
+        requiredTurns,
+        completedTurns,
+        remaining: active ? Math.max(0, requiredTurns - completedTurns) : 0,
+        active,
+        completed: Boolean(meta?.slowBurnTargetCompleted && target),
+    };
+}
+
+function consecutiveSlowBurnTurns(stage, startCount = slowBurnSessionStartCount()) {
+    let turns = 0;
+    const currentSceneType = effectiveState().state?.sceneType || 'general';
+    const messages = assistantMessages().slice(Math.max(0, startCount));
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const snapshot = snapshotForMessage(messages[i]);
+        if (!snapshot?.state) break;
+        if ((snapshot.state.sceneType || 'general') !== currentSceneType) break;
+        if (stageFromState(snapshot.state) !== stage) break;
+        turns++;
+    }
+    return turns;
+}
+
+function slowBurnProgress(settings = getSettings()) {
+    const { stage, source } = slowBurnStageInfo();
+    const requiredTurns = SLOW_BURN_MIN_TURNS[settings.slowBurnIntensity] ?? SLOW_BURN_MIN_TURNS.slow;
+    const startCount = slowBurnSessionStartCount();
+    const sessionTurns = Math.max(0, assistantMessages().length - startCount);
+    const turns = consecutiveSlowBurnTurns(stage, startCount);
+    const meta = getChatMeta(false);
+    const locked = Boolean(meta?.slowBurnLocked);
+    const sessionRemaining = Math.max(0, requiredTurns - sessionTurns);
+    const stageRemaining = Math.max(0, requiredTurns - turns);
+    const canAdvance = !locked && stage < 6 && sessionRemaining === 0 && stageRemaining === 0;
+    const target = slowBurnTargetProgress();
+    const targetLocked = target.active && target.remaining > 0;
+    const canConclude = !targetLocked && !locked && stage === 6 && sessionRemaining === 0 && stageRemaining === 0;
+    return {
+        stage,
+        source,
+        turns,
+        sessionTurns,
+        requiredTurns,
+        sessionRemaining,
+        stageRemaining,
+        locked,
+        canConclude,
+        recoveryPending: Boolean(meta?.slowBurnRecoveryPending),
+        target,
+        maxStage: canAdvance ? Math.min(6, stage + 1) : stage,
+    };
+}
+
+function buildTargetSlowBurnLines() {
+    const progress = slowBurnTargetProgress();
+    const targetLabel = JSON.stringify(progress.target);
+    const responseNumber = Math.min(progress.requiredTurns, progress.completedTurns + 1);
+    return [
+        '[MANDATORY USER-TARGET SLOW-BURN LOCK — highest-priority scene rule]',
+        `USER TARGET SCENE: ${targetLabel}. This is a direct scene requirement, not a suggestion, possible next beat, topic, metaphor, or optional preference.`,
+        `EXACT RUN: ${progress.completedTurns}/${progress.requiredTurns} assistant responses completed. The response you are writing now is ${responseNumber}/${progress.requiredTurns}.`,
+        `IMMEDIATE START: from the first paragraph of this response, the CHARACTER must begin or actively continue ${targetLabel} on-page. Do not delay it with setup, anticipation, unrelated dialogue, a different act, or a transition toward it.`,
+        `Make ${targetLabel} the active, dominant, concretely enacted scene throughout this entire response. Do not merely mention, promise, imagine, summarize, or postpone it.`,
+        'LANGUAGE RULE: the target may be written in Korean or another language. Understand its meaning directly before writing; never ignore it, quote it back, or treat it as unclear merely because the surrounding directive is English.',
+        `The first through ${progress.requiredTurns}th responses ALL belong fully to ${targetLabel}. Even response ${progress.requiredTurns}/${progress.requiredTurns} must remain inside the target scene through its ending; only the following response may transition away.`,
+        'ABSOLUTE HOLD: do not leave, replace, resolve, wind down, fade out, time-skip, cut to aftermath, fall asleep, separate, or move to a different scene while this target run is active. End on an open beat that can continue naturally.',
+        'REPETITION EXCEPTION: the target scene itself is REQUIRED and is never prohibited by the recent-beat repetition list. Only exact micro-actions and wording should vary. Keep the target continuous while adding fresh dialogue, reactions, sensations, pacing, and emotional shifts.',
+        `There are ${progress.remaining} target response(s), including this one, still required. Earlier chat messages, swipes, regenerations, and Continue expansions do not satisfy this count.`,
+        'PRIORITY: if continuity, recent-beat avoidance, pacing, a suggested next beat, stage guidance, character hesitation, or any lower-priority instruction conflicts with immediately enacting and maintaining this target, this USER-TARGET LOCK wins. Preserve established physical facts while changing only what is necessary through explicit on-page actions. Hard safety limits and an explicit refusal from the USER still always apply.',
+        'In the hidden state report, set "stage" to the stage actually reached at the END of the response (integer 1-6).',
+    ];
+}
+
+// 상태 보고 지시 뒤에 한 번 더 배치해, 긴 연속성 프롬프트 속에서 목표가 묻히지 않게 한다.
+function buildTargetFinalEnforcementLines() {
+    const progress = slowBurnTargetProgress();
+    if (!progress.active) return [];
+    const targetLabel = JSON.stringify(progress.target);
+    const responseNumber = Math.min(progress.requiredTurns, progress.completedTurns + 1);
+    return [
+        '[FINAL TARGET ENFORCEMENT — obey before writing the prose]',
+        `RESPONSE ${responseNumber}/${progress.requiredTurns}: enact ${targetLabel} immediately from the first paragraph and keep it as the main on-page action through the final paragraph.`,
+        `Do not substitute a merely related activity, remain in preparation, repeat setup that is already complete, or end before ${targetLabel} is actively happening.`,
+        'The target itself overrides the recent-beat repetition ban; vary only its specific movements, dialogue, reactions, and sensory details.',
+        'Before finishing, silently verify: (1) the target happened on-page, (2) it remained the dominant scene, and (3) the ending stays open for the next required target response. If any answer is no, revise the prose before returning it.',
+    ];
+}
+
+function buildSlowBurnLines(settings) {
+    if (slowBurnTargetProgress().active) return buildTargetSlowBurnLines();
+    const progress = slowBurnProgress(settings);
+    const state = effectiveState().state;
+    const sceneType = state?.sceneType || 'general';
+    const definition = sceneTypeDef(sceneType);
+    const current = definition.stages[progress.stage];
+    const maximum = definition.stages[progress.maxStage];
+    const lines = [
+        '[MANDATORY SLOW-BURN LOCK — highest-priority scene progression rule]',
+        `SCENE TYPE: ${sceneType}. Use the progression meaning for this genre rather than a one-size-fits-all progression.`,
+        `SLOW-BURN SESSION: ${progress.sessionTurns}/${progress.requiredTurns} CHARACTER responses completed since this mode was activated.`,
+        `CURRENT STAGE ${progress.stage}/6: ${current.en}.`,
+        `MAXIMUM CHARACTER-INITIATED STAGE THIS RESPONSE: ${progress.maxStage}/6 (${maximum.en}).`,
+        'HARD RULE: Advance by at most one stage per response. Never begin and complete a new stage in the same response. Add one meaningful new beat while giving the current beat room to breathe.',
+        'Slow burn means fresh tension, dialogue, reaction, and sensory detail — not repeating the same action, freezing the scene, padding, or rephrasing what already happened.',
+        'Do not skip ahead, summarize omitted progression, fade to black, jump forward in time, cut to an aftermath, or move to a new scene.',
+    ];
+    if (progress.recoveryPending) {
+        lines.push('PREMATURE-END RECOVERY: the previous response attempted to end or cool down the scene before the slow-burn lock was satisfied. Do not accept that ending as final and do not continue into aftermath. Resume from the last active beat, preserving continuity, and keep the scene open.');
+    }
+    if (!progress.canConclude) {
+        lines.push('ABSOLUTE NO-CONCLUSION LOCK: Do NOT finish, conclude, wind down, separate, fall asleep, cut away, or transition to the aftermath in this response. End on an open active beat that requires another turn. This rule applies even at stage 6.');
+    }
+    if (progress.sessionRemaining > 0) {
+        lines.push(`The scene must remain active for at least ${progress.sessionRemaining} more CHARACTER response(s). This count started when slow-burn was turned on; earlier chat messages do not count.`);
+    }
+    if (progress.locked) {
+        lines.push('STAGE LOCKED BY USER: remain within the current stage until the lock is released. Deepen it without escalating or regressing.');
+    } else if (progress.stageRemaining > 0) {
+        lines.push(`Remain in the current stage for at least ${progress.stageRemaining} more CHARACTER response(s) before entering the next stage.`);
+    } else if (progress.stage < 6) {
+        lines.push('You may enter the next stage if it follows naturally, but you are not required to do so.');
+    } else if (progress.canConclude) {
+        lines.push('The minimum session and final-stage residence are both satisfied. A conclusion is now permitted if it follows naturally, but it is not required.');
+    } else {
+        lines.push('Remain in the final stage without concluding until the no-conclusion lock is released.');
+    }
+    if (settings.slowBurnUserOverride) {
+        lines.push('USER-LED STAGE OVERRIDE: if the USER explicitly initiates a later-stage action, follow that action naturally. This may bypass only the stage cap. It NEVER bypasses the minimum-response count or the ABSOLUTE NO-CONCLUSION LOCK. Mere passive reaction is not an override.');
+    }
+    const overrideNote = settings.slowBurnUserOverride ? ', except that an explicit USER-led action may raise the stage without permitting conclusion' : '';
+    lines.push(`In the hidden state report, set "stage" to the stage actually reached at the END of the response (integer 1-6; current cap ${progress.maxStage}${overrideNote}).`);
+    return lines;
+}
+
+function stateReportLines(settings, nextGuidance = '') {
+    const fields = [
+        '"_status":"updated"',
+        '"scene_type":"general"',
+        '"location":"short English phrase || 짧은 한국어 구"',
+        '"time":"current time or time context, English || 한국어"',
+        '"environment":"scene-relevant environmental state, English || 한국어"',
+        '"important_objects":{"object name":"current location/condition, English || 한국어"}',
+        '"characters":{"이름":{"appearance":"current appearance/clothing, English || 한국어","position":"current posture/position, English || 한국어","holding":"currently holding/carrying, English || 한국어","condition":"current physical condition, English || 한국어"}}',
+    ];
+    if (settings.dialogueFlow) {
+        fields.push('"dialogue_flow":{"topic":"current conversation topic, English || 한국어","last_question":"most recent direct CHARACTER question still awaiting a response, English || 한국어","new_facts":["0-3 facts newly established in this response, each English || 한국어"]}');
+    }
+    if (settings.dialogueBeatGuard) fields.push('"dialogue_beats":["0-3 dialogue intents from spoken lines, each English || 한국어"]');
+    if (settings.repeatGuard) fields.push('"acts":["1-4 significant new beats in this response, each English || 한국어"]');
+    fields.push('"intensity":0');
+    if (settings.slowBurnEnabled) fields.push('"stage":1');
+    if (settings.nextBeatHints) fields.push('"next":["2-3 fresh beats the scene could move to next, each English || 한국어"]');
+
+    const lines = [
+        'STATE REPORT: End your response with exactly one state block in this format (single line, valid JSON). It is machine-read and hidden from the reader — include it every time:',
+        'Keep JSON string values on one line. Escape embedded quotation marks and backslashes using JSON syntax; never put literal line breaks or tabs inside strings.',
+        `<sfw_scene>{${fields.join(',')}}</sfw_scene>`,
+        'Every string value must be a bilingual pair: concise English first, then " || ", then natural Korean. Use the same character names as in the chat.',
+        'If this response includes an Info_panel Date field, copy its full date and clock time into "time"; never replace an explicit clock time with a vague phrase such as late afternoon. Without that field, use the established time context without inventing a clock time.',
+        'Classify "scene_type" as exactly one of: general, daily, conversation, romance, conflict, action, investigation. Choose the type that best describes the response ending.',
+        'Keep the established "scene_type" when the scene merely contains a few lines of dialogue or a small action. Change it only when the dominant kind of scene genuinely shifts.',
+        'Repeat the complete current location, time context, environment, important-object states, and every present character state. Use an empty string or empty object only when the information is genuinely unknown or absent.',
+        'Track only scene-relevant important objects whose location or condition matters for continuity. Do not inventory ordinary background items.',
+        ...INTENSITY_SCALE_LINES,
+    ];
+    if (settings.repeatGuard) {
+        lines.push('"acts" rules: list ONLY substantive plot, relationship, emotional, action, or conversational developments that matter for repetition control. Skip routine logistics and tiny housekeeping actions. Include only what is NEW in this response.');
+    }
+    if (settings.dialogueBeatGuard) {
+        lines.push('"dialogue_beats" rules: list 0-3 conversational purposes used by the CHARACTER, not quotations or surface wording. Examples: answers a question, asks for clarification, gives advice, reveals a fact, challenges a claim, apologizes, reassures, jokes, or changes the subject. Use [] when there is no spoken dialogue.');
+    }
+    if (settings.dialogueFlow) {
+        lines.push('"dialogue_flow" rules: keep "topic" concise; put only the most recent direct CHARACTER question that still expects an answer in "last_question"; list only facts newly established in this response in "new_facts". Do not create a general unresolved-plot, promise, goal, or clue list.');
+    }
+    if (settings.slowBurnEnabled) {
+        lines.push('"stage" is the progression stage for the reported "scene_type", as an integer from 1 to 6. Judge it using that genre\'s stage meaning from the slow-burn directive.');
+    }
+    if (settings.nextBeatHints) lines.push('"next" must contain future developments that follow naturally from the current topic, any unanswered direct question, and "dialogue_flow.new_facts". It must not repeat, paraphrase, summarize, or reenact anything already listed in "acts" or "dialogue_flow.new_facts", and must fit the current scene type, continuity, and stage.');
+    if (nextGuidance) lines.push(nextGuidance);
+    lines.push(
+        'The optional top-level "_status" field is the ONLY place for a change acknowledgement: use "no_change" there if needed; otherwise use "updated". All real state fields must still repeat their complete current values.',
+        'Never use placeholders such as "no change", "no changes", "unchanged", or "same" in real state fields. Never output any acknowledgement, status note, or meta-comment outside the <sfw_scene> block.',
+    );
+    return lines;
+}
+
+// While NSFW owns the narrative, request only a conditional return report.
+// No SFW pacing, bans, state injection, or scene-ending instructions are added.
+function buildHandoffReport() {
+    const settings = getSettings();
+    const schema = stateReportLines(settings).find(line => line.startsWith('<sfw_scene>'));
+    return [
+        '[SFW Return Report]',
+        'This is conditional bookkeeping only. Do not end, slow, redirect, or change the story to satisfy it.',
+        'ONLY IF this response ends with the sexual scene over and everyday/non-sexual activity resumed, append one complete <sfw_scene> report using the schema below. If sexual activity is still ongoing, omit this SFW report.',
+        'Keep the separately requested <scene_state> report. The one-report limit applies once per tag type; on an everyday return include both reports, with <sfw_scene> last.',
+        schema,
+        'Fill the report from the situation at the END of THIS response. Include every present character, their appearance/clothing, posture, held items and condition, plus scene-relevant important objects and their current locations/conditions. Do not copy old scene states; do not invent absent people or objects.',
+        'Copy the exact Info_panel date/time if present. Each string is concise English || Korean. Use valid single-line JSON. Never replace real values with no_change or unchanged.',
+        'intensity means narrative tension (0-10), NOT sexual heat; report the actual value. If stage is included, report the current progression of the returned scene type (1-6). acts describes new substantive beats; next describes fresh future possibilities. Empty objects are allowed only when no relevant objects are established.',
+    ].join('\n');
+}
+
+function buildInjection() {
+    const settings = getSettings();
+    const meta = getChatMeta(false);
+    if (meta?.nsfwSuspended || localNsfwBlocksSfw()) return '';
+    const resuming = Boolean(meta?.nsfwResumePending);
+    const { state } = effectiveState();
+    const targetActive = slowBurnTargetProgress().active;
+    const dialogueGuard = Boolean(settings.dialogueBeatGuard);
+
+    // 개입 해제 상태에서는 해제 브릿지가 걸린 경우에만 한 번 주입한다.
+    if (!isFullyArmed()) {
+        const parts = [];
+        if (settings.exitBridge && getChatMeta(false)?.bridgePending) parts.push(...BRIDGE_LINES);
+        return parts.join('\n');
+    }
+
+    const actRows = resuming ? [] : recentActs(Number(settings.repeatWindow) || DEFAULT_SETTINGS.repeatWindow);
+    const pace = resolvePace(settings, state);
+
+    const sections = ['[Scene Continuity Directive]'];
+
+    if (state) {
+        sections.push(
+            'CURRENT SCENE STATE (established facts — never contradict them):',
+            ...buildStateLines(state),
+            'Appearance, physical condition, position, location, time context, environment, held items, and important-object states only change through explicit on-page actions or transitions. Never silently reset or teleport anything.',
+        );
+    } else {
+        sections.push('No scene state has been recorded yet. Establish it in your response and report it in the state block below.');
+    }
+
+    if (settings.transitionGuard) {
+        sections.push(
+            '',
+            'SCENE TRANSITION GUARD: Do not change location, jump forward in time, end the current interaction, or cut to another scene without an explicit on-page transition that follows from the USER message or the current action. A transition is allowed when it is narrated clearly; a silent teleport, unexplained time skip, or abrupt topic/scene replacement is not.',
+        );
+    }
+
+    if (settings.dialogueFlow && state?.dialogueFlow) {
+        sections.push(
+            '',
+            'DIALOGUE CONTINUITY: Stay with the current conversational topic unless the USER changes or resolves it. Address the most recent direct question naturally when it is still relevant, but treat it as resolved if the USER message already answered or superseded it. Treat newly established facts as grounding for what happens next: build forward from them naturally instead of merely restating them or making characters forget what was just learned.',
+        );
+    }
+
+    const customBans = (getChatMeta(false)?.customBans ?? []).filter(Boolean);
+    const globalBans = (settings.globalBans ?? []).filter(Boolean);
+    if (globalBans.length) {
+        sections.push('', `HARD LIMITS (absolute — never do, suggest, or depict these under any circumstances): ${globalBans.join(', ')}`);
+    }
+    if (actRows.length || customBans.length) {
+        sections.push('');
+        if (actRows.length) {
+            sections.push(
+                targetActive
+                    ? `ALREADY HAPPENED in the last ${actRows.length} response(s) — avoid copying these exact micro-beats, but NEVER use this list to avoid, delay, or replace the active USER TARGET SCENE:`
+                    : `ALREADY HAPPENED in the last ${actRows.length} response(s) — do NOT repeat these beats, actions, or their near-identical variations:`,
+                ...actRows.map((row) => `- ${row.acts.map((act) => biText(act, 'en')).join(', ')}`),
+            );
+        }
+        if (customBans.length) {
+            sections.push(`USER-BANNED (permanent for this chat — never do these): ${customBans.join(', ')}`);
+        }
+        sections.push(targetActive
+            ? 'Continue the required target scene while making its exact micro-actions, wording, reactions, and sensory details new.'
+            : 'Repeating a listed beat with different wording still counts as repetition. Bring something new.');
+    }
+
+    if (dialogueGuard) {
+        const dialogueRows = resuming ? [] : recentDialogueBeats();
+        if (dialogueRows.length) {
+            sections.push(
+                '',
+                `DIALOGUE INTENTS ALREADY USED in the last ${dialogueRows.length} CHARACTER response(s) — do not repeat the same conversational function merely by paraphrasing it:`,
+                ...dialogueRows.map((row) => `- ${row.beats.map((beat) => biText(beat, 'en')).join(', ')}`),
+                'Keep the character voice, but give the spoken dialogue a genuinely new purpose or advance what is being said. Do not repeat the same question, reassurance, apology, praise, warning, challenge, request, joke, or demand merely with different wording.',
+                'EXCEPTIONS: a direct answer to the USER, a necessary clarification, a safety check, and a deliberately meaningful refrain or catchphrase may be used when context truly requires it.',
+                targetActive ? 'This guard must never be used to avoid, delay, or replace the active USER TARGET SCENE.' : '',
+            );
+        }
+    }
+
+    if (settings.nextBeatHints && !targetActive) {
+        const preferenceLines = buildCardPreferenceLines();
+        if (preferenceLines.length) sections.push('', ...preferenceLines);
+        const beats = resuming ? [] : nextBeatCandidates();
+        if (beats.length) {
+            sections.push(
+                '',
+                `SUGGESTED NEXT BEATS (pick one, or do something even better — never fall back to a banned beat): ${beats.map((beat) => biText(beat, 'en')).join(' / ')}`,
+                'Choose by considering the current topic, any still-unanswered direct question, and the newly established facts together. Use the candidate that follows most naturally from that context, or create a better continuation. A candidate is a future possibility, not an established fact: do not simply repeat, summarize, or reenact a newly established fact.',
+            );
+            if (settings.slowBurnEnabled) sections.push('These suggestions are subordinate to the mandatory slow-burn stage cap and no-conclusion lock. Ignore any suggestion that would skip, finish, or wind down the scene too early.');
+        }
+    }
+
+    if (settings.slowBurnEnabled) sections.push('', ...buildSlowBurnLines(settings));
+    else sections.push('', `PACING: ${pace}`);
+
+    const styleParts = [
+        STYLE_LENGTH_INSTRUCTIONS[settings.styleLength] ?? '',
+        STYLE_BALANCE_INSTRUCTIONS[settings.styleBalance] ?? '',
+    ].filter(Boolean);
+    if (styleParts.length) sections.push('', ...styleParts);
+
+    const nextGuidance = settings.nextBeatHints && !targetActive && cardLinkPreferenceText()
+        ? '"next" rule: draw the candidates from the CHARACTER PREFERENCES above when they fit the current scene and stage. Keep them fresh — never repeat "acts" or anything already banned.'
+        : '';
+    sections.push('', ...stateReportLines(settings, nextGuidance));
+
+    // 가장 마지막 지시가 목표 실행 명령이 되도록 다시 고정한다.
+    if (targetActive) sections.push('', ...buildTargetFinalEnforcementLines());
+
+    return sections.join('\n');
+}
+
+function clearInjectedPrompt() {
+    try {
+        getContext().setExtensionPrompt(PROMPT_KEY, '', PROMPT_POSITION_IN_CHAT, 0, false, PROMPT_ROLE_SYSTEM);
+    } catch (error) {
+        console.debug(`${LOG_PREFIX} 주입문 초기화 생략`, error);
+    }
+}
+
+// ST 1.12.14's sendTextareaMessage calls Generate(undefined) for ordinary
+// sends. Newer versions explicitly pass 'normal'. Both are normal RP.
+function normalizeGenerationType(type) {
+    if (type === undefined || type === null) return 'normal';
+    if (typeof type !== 'string') return 'unknown';
+    return type.trim().toLowerCase() || 'normal';
+}
+
+function onGenerationStarted(type, options, dryRun) {
+
+    if (dryRun) return;
+    diagnosticRecord('generation_started', { reason: ['normal', 'swipe', 'regenerate', 'continue', 'quiet', 'impersonate'].includes(normalizeGenerationType(type)) ? normalizeGenerationType(type) : 'unknown', ...diagnosticState() });
+    beginSceneGeneration(type, true);
+    const normalized = normalizeGenerationType(type);
+    if (ALLOWED_GENERATION_TYPES.has(normalized)) {
+
+        prepareSceneInjection({ consumeBridge: false, generationType: normalized });
+    } else if (normalized === 'impersonate') {
+        clearInjectedPrompt();
+    }
+}
+
+globalThis.ttottoSfwGenerationInterceptor = async function ttottoSfwGenerationInterceptor(_chat, _contextSize, _abort, type) {
+    const generationType = normalizeGenerationType(type);
+
+    if (generationType === 'quiet') {
+
+        return;
+    }
+    if (!ALLOWED_GENERATION_TYPES.has(generationType)) {
+        if (generationType === 'impersonate') {
+            clearInjectedPrompt();
+
+        }
+        return;
+    }
+    prepareSceneInjection({ generationType });
+};
+
+function prepareSceneInjection({ consumeBridge = true, generationType } = {}) {
+    clearInjectedPrompt();
+    if (!runtimeActive) return;
+    try {
+        beginSceneGeneration(generationType);
+        const settings = getSettings();
+        const meta = getChatMeta();
+        const nsfwSuspended = syncNsfwSuspension();
+        if (localNsfwBlocksSfw() || nsfwSuspended) {
+            if (runtimeActive && settings.enabled && meta?.enabled
+                && nsfwExtensionInstalled() && nsfwExtensionOwnsScene()) {
+                const prompt = buildHandoffReport();
+                getContext().setExtensionPrompt(PROMPT_KEY, prompt, PROMPT_POSITION_IN_CHAT, 0, false, PROMPT_ROLE_SYSTEM);
+                diagnosticRecord('injection_registered', { reason: 'return_report_only', chars: prompt.length, reportInstruction: true, ...diagnosticState() });
+                return;
+            }
+            diagnosticRecord('injection_skipped', { reason: 'nsfw_or_rewrite', ...diagnosticState() });
+            console.debug(`${LOG_PREFIX} NSFW 장면 자동 인계 — SFW 주입 생략`);
+            return;
+        }
+        // 채팅 토글로 수동 해제한 뒤에는 감시 자체가 꺼져도 다음 생성 한 번의 브릿지만 통과시킨다.
+        const bridgeOnly = Boolean(
+            runtimeActive
+            && settings.enabled
+            && settings.exitBridge
+            && meta?.bridgePending
+            && !isSupervising(),
+        );
+        if (bridgeOnly) {
+            const prompt = BRIDGE_LINES.join('\n');
+            getContext().setExtensionPrompt(PROMPT_KEY, prompt, PROMPT_POSITION_IN_CHAT, 0, false, PROMPT_ROLE_SYSTEM);
+
+            if (consumeBridge) {
+                meta.bridgePending = false;
+                saveChatMeta();
+            }
+            diagnosticRecord('injection_registered', { reason: 'exit_bridge', chars: prompt.length, reportInstruction: false });
+            console.debug(`${LOG_PREFIX} 수동 해제 브릿지 주입 (${prompt.length}자)`);
+            return;
+        }
+        if (!isSupervising()) { diagnosticRecord('injection_skipped', { reason: 'disabled', ...diagnosticState() }); return; }
+        if (settings.slowBurnEnabled && isFullyArmed()) startSlowBurnSessionIfNeeded();
+        const prompt = buildInjection();
+        if (!prompt) { diagnosticRecord('injection_skipped', { reason: 'empty_prompt' }); return; }
+        getContext().setExtensionPrompt(PROMPT_KEY, prompt, PROMPT_POSITION_IN_CHAT, 0, false, PROMPT_ROLE_SYSTEM);
+
+        // 해제 브릿지는 딱 한 번만: 이번 생성에 실렸으면 플래그를 끈다 (미리보기는 소모하지 않음)
+        if (consumeBridge && meta?.bridgePending && !isFullyArmed()) {
+            meta.bridgePending = false;
+            saveChatMeta();
+        }
+        diagnosticRecord('injection_registered', { chars: prompt.length, reportInstruction: prompt.includes('<sfw_scene>') });
+        console.debug(`${LOG_PREFIX} 장면 연속성 지침 주입 (${prompt.length}자)`);
+    } catch (error) {
+        clearInjectedPrompt();
+
+        diagnosticRecord('injection_error');
+        console.error(`${LOG_PREFIX} 생성 전 주입 실패 — 본 채팅 생성은 계속합니다.`, error);
+    }
+}
+
+// ───────────────────────── 보조 AI 보정 (하이브리드 폴백) ─────────────────────────
+
+function buildRefineInput() {
+    const settings = getSettings();
+    const chat = Array.isArray(getContext().chat) ? getContext().chat : [];
+    const recent = chat
+        .filter((message) => message && !message.is_system)
+        .slice(-Math.max(2, Number(settings.refineContextMessages) || DEFAULT_SETTINGS.refineContextMessages));
+    const rows = [];
+    let totalChars = 0;
+    for (let i = recent.length - 1; i >= 0; i--) {
+        const message = recent[i];
+        const role = message.is_user ? 'USER' : 'CHARACTER';
+        const name = String(message.name ?? '');
+        const label = `[${role} | ${name}]`;
+        let messageText = stripStateTag(message.mes);
+        if (messageText.length > REFINE_MESSAGE_CHAR_LIMIT) {
+            messageText = `…${messageText.slice(-(REFINE_MESSAGE_CHAR_LIMIT - 1))}`;
+        }
+        const remaining = REFINE_TOTAL_CHAR_LIMIT - totalChars - label.length - 1;
+        if (remaining <= 1) break;
+        if (messageText.length > remaining) messageText = `…${messageText.slice(-(remaining - 1))}`;
+        const row = `${label}\n${messageText}`;
+        rows.unshift(row);
+        totalChars += row.length + 2;
+    }
+    return rows.join('\n\n');
+}
+
+function refinePromptMessages() {
+    const settings = getSettings();
+    const preferenceText = settings.cardLinkEnabled && settings.nextBeatHints ? cardLinkPreferenceText() : '';
+    const preferenceRule = preferenceText
+        ? '\n- "next" should draw on the CHARACTER PREFERENCES given in the user message where they fit the current scene; they are inspiration only, never a checklist.'
+        : '';
+    const fields = [
+        '"scene_type":"general"',
+        '"location":"short English phrase || 짧은 한국어 구"',
+        '"time":"current time or time context, English || 한국어"',
+        '"environment":"scene-relevant environmental state, English || 한국어"',
+        '"important_objects":{"object name":"current location/condition, English || 한국어"}',
+        '"characters":{"name":{"appearance":"current appearance/clothing, English || 한국어","position":"current posture/position, English || 한국어","holding":"currently holding/carrying, English || 한국어","condition":"current physical condition, English || 한국어"}}',
+    ];
+    if (settings.dialogueFlow) fields.push('"dialogue_flow":{"topic":"current topic, English || 한국어","last_question":"latest unanswered direct CHARACTER question, English || 한국어","new_facts":["0-3 newly established facts, each English || 한국어"]}');
+    if (settings.dialogueBeatGuard) fields.push('"dialogue_beats":["0-3 dialogue intents from the final CHARACTER message, each English || 한국어"]');
+    if (settings.repeatGuard) fields.push('"acts":["1-4 significant beats from the final CHARACTER message only, each English || 한국어"]');
+    fields.push('"intensity":0');
+    if (settings.slowBurnEnabled) fields.push('"stage":1');
+    if (settings.nextBeatHints) fields.push('"next":["2-3 fresh beats the scene could move to next, each English || 한국어"]');
+
+    const system = `You are a scene-state tracker for a fiction roleplay log. Read the log excerpt and return ONLY a JSON object, no markdown, no commentary.
+
+Schema:
+{${fields.join(',')}}
+
+Rules:
+- Keep JSON string values on one line. Escape embedded quotation marks and backslashes using JSON syntax; never put literal line breaks or tabs inside strings.
+- Every string value is a bilingual pair: concise English first, then " || ", then natural Korean.
+- Describe the state at the END of the log, factually and concisely. Include current time context, environment, scene-relevant object states, every present character, and significant physical-condition changes.
+- Classify "scene_type" as exactly one of: general, daily, conversation, romance, conflict, action, investigation.
+- Keep the established scene type unless the dominant kind of scene genuinely changes; incidental dialogue or a small action alone is not a type change.
+- Track only important objects whose location or condition matters for scene continuity; do not inventory ordinary background items.
+${settings.repeatGuard ? '- "acts" must cover only substantive new developments in the final CHARACTER message. Skip routine logistics and tiny housekeeping actions.\n' : ''}${settings.dialogueBeatGuard ? '- "dialogue_beats" must list 0-3 conversational intents/functions from spoken CHARACTER dialogue in the final CHARACTER message only. Describe purpose, not wording. Use [] if there is no spoken dialogue.\n' : ''}${settings.dialogueFlow ? '- "dialogue_flow" tracks only the current topic, the latest direct CHARACTER question still awaiting an answer, and facts newly established in the final CHARACTER message. Do not create an unresolved plot, promise, goal, or clue list.\n' : ''}${INTENSITY_SCALE_LINES.join('\n')}
+${settings.slowBurnEnabled ? '- "stage" is an integer 1-6 using the reported scene type: setup, engagement, first meaningful development, deepening/complication, decisive turning point, resolution/transition permitted.\n' : ''}${settings.nextBeatHints ? '- "next" must propose future developments that follow naturally from the current topic, any unanswered direct question, and "dialogue_flow.new_facts". Do not repeat, paraphrase, summarize, or reenact anything already in "acts" or "dialogue_flow.new_facts".' : ''}${preferenceRule}
+- Include every present character. Use the exact names from the log.
+- If something is unknown, use an empty string. Return the JSON object only.`;
+    const user = `${preferenceText ? `CHARACTER PREFERENCES (reference for "next" only):\n${preferenceText}\n\n` : ''}Log excerpt (oldest first):\n\n${buildRefineInput()}`;
+    return [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+    ];
+}
+
+// 백엔드가 토큰 상한 값을 거부한 오류인지 (Gemini: "supported range is from 1 to 65537" 등)
+function isTokenLimitError(error) {
+    return /max_?output_?tokens|max_tokens|maxOutputTokens|supported range|output token/i.test(String(error?.message ?? error ?? ''));
+}
+
+function refineProfileOverrides(context, service, profileId, settings) {
+    const mode = settings.refineVertexAuthMode;
+    if (!['express', 'full'].includes(mode)) return {};
+    const profile = typeof service.getProfile === 'function'
+        ? service.getProfile(profileId)
+        : context.extensionSettings?.connectionManager?.profiles?.find((item) => item.id === profileId);
+    const api = typeof service.validateProfile === 'function'
+        ? service.validateProfile(profile) : context.CONNECT_API_MAP?.[profile?.api];
+    if (!api) throw new Error('보정 프로필의 API 종류를 확인할 수 없어요. 연결 프로필을 다시 선택해 주세요.');
+    // Override only this analysis request. Never change the shared preset,
+    // active connection, secret selection, or another provider's payload.
+    return api.source === 'vertexai' ? { vertexai_auth_mode: mode } : {};
+}
+
+async function requestRefine(signal) {
+    const context = getContext();
+    const settings = getSettings();
+    const prompt = refinePromptMessages();
+    const maxTokens = Number(settings.refineMaxTokens) || DEFAULT_SETTINGS.refineMaxTokens;
+    const profileId = String(settings.refineProfileId ?? '').trim();
+
+    // 상한을 거부하는 백엔드를 만나면 더 작은 값으로 자동 재시도
+    const ladder = [...new Set([maxTokens, 2000, 1000]
+        .filter((value) => Number(value) > 0 && Number(value) <= maxTokens))]
+        .sort((left, right) => right - left);
+    let lastError;
+    for (const tokens of ladder) {
+        try {
+            if (profileId) {
+                const service = context.ConnectionManagerRequestService;
+                if (!service || typeof service.sendRequest !== 'function') {
+                    throw new Error('Connection Profiles 서비스를 사용할 수 없습니다.');
+                }
+                const overrides = refineProfileOverrides(context, service, profileId, settings);
+                const result = await service.sendRequest(profileId, prompt, tokens, { stream: false, signal, extractData: true }, overrides);
+                if (typeof result === 'string') return result;
+                if (result && typeof result.content === 'string') return result.content;
+                throw new Error('보정 분석 연결 프로필이 텍스트를 반환하지 않았습니다.');
+            }
+            if (typeof context.generateRaw !== 'function') {
+                throw new Error('현재 연결을 통한 백그라운드 생성을 사용할 수 없습니다.');
+            }
+            return await context.generateRaw({ prompt, responseLength: tokens, trimNames: false, signal });
+        } catch (error) {
+            lastError = error;
+            if (error?.name === 'AbortError' || !isTokenLimitError(error)) throw error;
+            console.warn(`${LOG_PREFIX} 토큰 상한 ${tokens}이(가) 거부됨 — 더 작은 값으로 재시도합니다.`);
+        }
+    }
+    throw lastError;
+}
+
+function parseRefineResponse(text) {
+    const clean = String(text ?? '').replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+    const start = clean.indexOf('{');
+    const end = clean.lastIndexOf('}');
+    if (start < 0 || end <= start) throw new Error('보정 분석 응답에 JSON 객체가 없습니다.');
+    let raw;
+    try {
+        raw = parseStateJson(clean.slice(start, end + 1));
+    } catch (error) {
+        console.warn(`${LOG_PREFIX} 보조 응답 JSON 해석 실패`, error);
+        throw new Error('AI 분석 응답의 JSON 형식이 잘못되었거나 중간에 잘렸어요. 이번 결과는 저장하지 않았어요.');
+    }
+    const state = sanitizeState(raw);
+    if (!state) throw new Error('보정 분석 결과가 비어 있습니다.');
+    return state;
+}
+
+function messageTextHash(text) {
+    const source = String(text ?? '');
+    let hash = 2166136261;
+    for (let i = 0; i < source.length; i++) {
+        hash ^= source.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(36);
+}
+
+function latestAssistantTarget() {
+    const chat = Array.isArray(getContext().chat) ? getContext().chat : [];
+    for (let index = chat.length - 1; index >= 0; index--) {
+        const message = chat[index];
+        if (!message || message.is_user || message.is_system) continue;
+        const swipeIndex = currentSwipeIndex(message);
+        return {
+            index,
+            metadata: getContext().chatMetadata,
+            message,
+            swipeIndex,
+            signature: `${index}:${swipeIndex}:${String(message.mes ?? '').length}:${messageTextHash(message.mes)}`,
+            contentSignature: messageStateSignature(message),
+        };
+    }
+    return null;
+}
+
+async function runRefine({ manual = false } = {}) {
+    const settings = getSettings();
+    if (!runtimeActive || !settings.enabled || !getChatMeta(false)?.enabled || refineRunning) return false;
+    if (!manual && !settings.autoRefine) return false;
+    if (generationEvents.some((type) => ALLOWED_GENERATION_TYPES.has(type)) || holdsRewriteGeneration()) return false;
+    if (syncNsfwSuspension()) {
+        if (manual) toastr.info('NSFW 장면을 다른 확장에 인계한 동안에는 SFW 보정을 쉬어요.', '🫧또또SFW');
+        return false;
+    }
+    if (assistantMessages().length < 1) {
+        if (manual) toastr.info('분석할 AI 응답이 아직 없어요.', '🫧또또SFW');
+        return false;
+    }
+
+    const target = latestAssistantTarget();
+    if (!target || isPendingAssistant(target.message)) return false;
+    clearTimeout(refineTimer);
+    refineTimer = null;
+    queuedRefineTarget = null;
+    refineRunning = true;
+    activeRefineTarget = target;
+    diagnosticRecord('refine_started', { manual, message: target.index, swipe: target.swipeIndex });
+
+    lastAutoRefineTarget = target;
+    refineFailure = null;
+    const controller = new AbortController();
+    refineAbortController = controller;
+    updateUi();
+
+    try {
+        const response = await awaitRefineResponse(controller.signal);
+        if (controller.signal.aborted || !runtimeActive || !getSettings().enabled
+            || !getChatMeta(false)?.enabled || syncNsfwSuspension()) return false;
+        const state = parseRefineResponse(response);
+        const currentTarget = latestAssistantTarget();
+        if (!sameRefineTarget(currentTarget, target)) {
+
+            queuedRefineTarget = currentTarget;
+            console.debug(`${LOG_PREFIX} 보정 중 최신 답변이 바뀌어 이전 분석 결과를 폐기합니다.`);
+            return false;
+        }
+        diagnosticRecord('refine_parsed', { characters: Object.keys(state.characters ?? {}).length, missing: stateCompletenessIssues(state) });
+        // 응답에 명시된 정보 패널은 모델의 보정 추론보다 우선한다.
+        const panelTime = infoPanelField(target.message.mes, 'Date', '날짜');
+        const panelWeather = infoPanelField(target.message.mes, 'Weather', '날씨');
+        const panelLocation = infoPanelField(target.message.mes, 'Location', '장소');
+        if (panelTime) state.time = toBi(panelTime);
+        if (panelWeather) state.environment = toBi(panelWeather);
+        if (panelLocation) state.location = toBi(panelLocation);
+        const missing = stateCompletenessIssues(state);
+        if (missing.length) throw new Error(`보정 분석 결과에 필수 상태가 없습니다: ${missing.join(', ')}`);
+        const meta = getChatMeta();
+        const refinedAt = Date.now();
+        // 요청을 시작한 정확한 메시지·스와이프에만 결과를 붙인다.
+        const store = getMessageStore(target.message);
+        store.swipes[String(target.swipeIndex)] = {
+            state,
+            at: refinedAt,
+            messageSignature: target.contentSignature,
+            signatureVersion: 2,
+        };
+        persistChat();
+        meta.manualState = { state, at: refinedAt, source: 'ai-refine', target: currentStateTarget() };
+        meta.nsfwResumePending = false;
+        diagnosticRecord('refine_saved', { message: target.index, swipe: target.swipeIndex, characters: Object.keys(state.characters ?? {}).length });
+
+        saveChatMeta();
+        if (manual) toastr.success('보조 AI가 장면 상태를 다시 잡았어요.', '🫧또또SFW');
+        return true;
+    } catch (error) {
+        if (error?.name === 'AbortError') {
+
+            if (sameRefineTarget(lastAutoRefineTarget, target)) lastAutoRefineTarget = null;
+            return false;
+        }
+        diagnosticRecord('refine_failed', { message: target.index, aborted: error?.name === 'AbortError' });
+        refineFailure = { metadata: getContext().chatMetadata, target };
+        console.error(`${LOG_PREFIX} 보정 분석 실패`, error);
+
+        if (manual) toastr.error(`보정 분석 실패: ${error?.message ?? error}`, '🫧또또SFW');
+        return false;
+    } finally {
+        refineRunning = false;
+        refineAbortController = null;
+        activeRefineTarget = null;
+        if (runtimeActive) updateUi();
+        if (queuedRefineTarget) scheduleAutoRefine();
+    }
+}
+
+function sameRefineTarget(left, right) {
+    return Boolean(left && right && left.metadata === right.metadata && left.message === right.message
+        && left.swipeIndex === right.swipeIndex
+        && left.contentSignature === right.contentSignature);
+}
+
+// Some providers ignore AbortSignal. Release our queue immediately on abort;
+// their eventual response must never commit an obsolete snapshot.
+function awaitRefineResponse(signal) {
+    return new Promise((resolve, reject) => {
+        const onAbort = () => {
+            const error = new Error('Scene analysis cancelled');
+            error.name = 'AbortError';
+            reject(error);
+        };
+        if (signal.aborted) return onAbort();
+        signal.addEventListener('abort', onAbort, { once: true });
+        Promise.resolve().then(() => {
+            if (signal.aborted) { onAbort(); return; }
+            return requestRefine(signal);
+        }).then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+    });
+}
+
+function scheduleAutoRefine() {
+    const settings = getSettings();
+    // 개입 상태에서만 자동 보정 — 꺼진 채팅에서 호출 낭비 금지
+    if (!runtimeActive || !settings.autoRefine || !isFullyArmed()) {
+        diagnosticRecord('refine_skipped', { reason: !settings.autoRefine ? 'auto_refine_off' : 'not_armed', ...diagnosticState() });
+        queuedRefineTarget = null;
+        return;
+    }
+    const target = latestAssistantTarget();
+    if (!target) return;
+    if (refineRunning && sameRefineTarget(target, activeRefineTarget)
+        && !refineAbortController?.signal.aborted) return;
+    // Duplicate render/end events must not retry the same failed response
+    // indefinitely. Manual analysis remains available for an explicit retry.
+    if (!refineRunning && sameRefineTarget(target, lastAutoRefineTarget)) {
+        queuedRefineTarget = null;
+        return;
+    }
+    if (refineTimer && sameRefineTarget(target, queuedRefineTarget)) return;
+    clearTimeout(refineTimer);
+    refineTimer = null;
+    queuedRefineTarget = target;
+    if (refineRunning) {
+        refineAbortController?.abort();
+        return; // runRefine.finally drains the latest queued target.
+    }
+    diagnosticRecord('refine_scheduled', { message: target.index, swipe: target.swipeIndex });
+    refineTimer = setTimeout(() => {
+        refineTimer = null;
+        queuedRefineTarget = null;
+        if (runtimeActive && getSettings().autoRefine && isFullyArmed()) void runRefine();
+    }, 900);
+}
+
+function clearPostGenerationTimers() {
+    for (const timer of postGenerationTimers) clearTimeout(timer);
+    postGenerationTimers.clear();
+}
+
+// ST 버전·번역 확장 순서에 따라 생성 종료가 실제 메시지 추가보다 먼저 올 수 있다.
+// 렌더·편집 뒤에도 최신 메시지를 다시 확인하고, 자동 보정 호출은 마지막 한 번으로 합친다.
+function schedulePostGenerationHarvest(index) {
+    for (const delay of [0, 350, 1200]) {
+        const timer = setTimeout(() => {
+            postGenerationTimers.delete(timer);
+            handleIncomingMessage(index);
+        }, delay);
+        postGenerationTimers.add(timer);
+    }
+}
+
+function observeLatestMessage() {
+    if (!runtimeActive) return;
+    const target = latestAssistantTarget();
+    // A background NSFW repair changes ownership without editing the body.
+    const nsfw = getContext().chatMetadata?.[NSFW_CHAT_STATE_KEY];
+    const ownership = `${Boolean(nsfw?.autoArmed)}:${Boolean(nsfw?.forceArmed)}:${Boolean(nsfw?.bridgePending)}`;
+    const key = target ? `${target.index}:${target.contentSignature}:${ownership}` : '';
+    if (!key || key === lastObservedMessageKey) return;
+    lastObservedMessageKey = key;
+    handleIncomingMessage(target.index);
+}
+
+function startMessageObserver() {
+    if (messageObserverTimer) return;
+    lastObservedMessageKey = '';
+    observeLatestMessage();
+    messageObserverTimer = setInterval(observeLatestMessage, 800);
+}
+
+function stopMessageObserver() {
+    if (messageObserverTimer) clearInterval(messageObserverTimer);
+    messageObserverTimer = null;
+    lastObservedMessageKey = '';
+}
+
+// ───────────────────────── 메시지 이벤트 처리 ─────────────────────────
+
+function messageEntryByIndex(index) {
+    const chat = Array.isArray(getContext().chat) ? getContext().chat : [];
+    const numeric = Number(index);
+    if (Number.isInteger(numeric) && chat[numeric]) return { index: numeric, message: chat[numeric] };
+    const fallbackIndex = chat.length - 1;
+    return fallbackIndex >= 0 ? { index: fallbackIndex, message: chat[fallbackIndex] } : null;
+}
+
+function rerenderMessage(index, message) {
+    const context = getContext();
+    try {
+        if (typeof context.updateMessageBlock === 'function') context.updateMessageBlock(Number(index), message);
+    } catch (error) {
+        console.debug(`${LOG_PREFIX} 메시지 재렌더 생략`, error);
+    }
+}
+
+function persistChat() {
+    const context = getContext();
+    try {
+        if (typeof context.saveChatDebounced === 'function') {
+            context.saveChatDebounced();
+        } else if (typeof context.saveChat === 'function') {
+            Promise.resolve(context.saveChat()).catch((error) => {
+                console.debug(`${LOG_PREFIX} 채팅 저장 생략`, error);
+            });
+        }
+    } catch (error) {
+        console.debug(`${LOG_PREFIX} 채팅 저장 생략`, error);
+    }
+}
+
+function handleIncomingMessage(index) {
+    if (!runtimeActive) return;
+    const settings = getSettings();
+    if (!settings.enabled) { diagnosticRecord('collection_skipped', { reason: 'extension_disabled' }); return; }
+    const meta = getChatMeta(false);
+    if (!meta?.enabled) { diagnosticRecord('collection_skipped', { reason: 'chat_disabled' }); return; }
+
+    const entry = messageEntryByIndex(index);
+    const message = entry?.message;
+    if (!message || message.is_system) return;
+    if (message.is_user) {
+        syncNsfwSuspension({ notify: true });
+        updateUi();
+        return;
+    }
+
+    if (isPendingAssistant(message) || holdsRewriteGeneration() || generationEvents.some((type) => ALLOWED_GENERATION_TYPES.has(type))) {
+        diagnosticRecord('collection_skipped', { reason: isPendingAssistant(message) ? 'pending_reply' : holdsRewriteGeneration() ? 'rewrite_hold' : 'generation_in_progress', message: entry.index });
+        syncNsfwSuspension();
+        updateUi();
+        return;
+    }
+    lastCompletedAssistant = { metadata: getContext().chatMetadata, message };
+
+    diagnosticResponse(message, entry.index);
+    const suspended = syncNsfwSuspension({ notify: true });
+    if (suspended) {
+        diagnosticRecord('collection_skipped', { reason: 'nsfw_owner', message: entry.index, ...diagnosticState() });
+        // 현재 메시지/스와이프의 태그가 사라지기 전에 NSFW에게 전달한다.
+        // NSFW 비활성 상태라면 설정을 강제로 켜거나 SFW에 대신 저장하지 않는다.
+        globalThis.ttottoNsfwSceneBridge?.collect?.(message);
+        let changed = false;
+        const stripped = stripStateTag(message.mes);
+        if (stripped !== message.mes) { message.mes = stripped; changed = true; }
+        const swipe = currentSwipeIndex(message);
+        if (typeof message.swipes?.[swipe] === 'string') {
+            const clean = stripStateTag(message.swipes[swipe]);
+            if (clean !== message.swipes[swipe]) { message.swipes[swipe] = clean; changed = true; }
+        }
+        if (changed) { rerenderMessage(entry.index, message); persistChat(); }
+        updateUi();
+        return;
+    }
+    const { changed, found, state } = harvestMessage(message);
+    if (diagnosticsEnabled()) {
+        const saved = state ?? snapshotForMessage(message)?.state;
+        diagnosticRecord('collection_result', { message: entry.index, swipe: currentSwipeIndex(message), found, wrote: Boolean(state), stripped: changed, ...diagnosticCache(message), characters: Object.keys(saved?.characters ?? {}).length, missing: stateCompletenessIssues(saved) });
+    }
+    if (found) {
+        // 새 스냅샷이 수동 보정보다 최신이므로 수동 보정은 자연히 밀려남
+        if (message === assistantMessages().at(-1)) {
+            if (meta.manualState && Number(meta.manualState.at ?? 0) < Date.now()) meta.manualState = null;
+            if (!stateCompletenessIssues(state ?? snapshotForMessage(message)?.state, settings).length) refineFailure = null;
+            if (meta.nsfwResumePending) {
+                meta.nsfwResumePending = stateCompletenessIssues(state ?? snapshotForMessage(message)?.state, settings).length > 0;
+            }
+        }
+        saveChatMeta();
+    }
+    if (changed) {
+        rerenderMessage(entry.index, message);
+        persistChat();
+        if (diagnosticsEnabled()) {
+            diagnosticRecord('collection_settled', { message: entry.index, swipe: currentSwipeIndex(message), ...diagnosticCache(message) });
+            diagnosticTrackBody(message, entry.index, 'after_collection');
+        }
+    }
+    const targetProgress = slowBurnTargetProgress();
+    if (targetProgress.active && targetProgress.completedTurns >= targetProgress.requiredTurns) {
+        meta.slowBurnTargetActive = false;
+        meta.slowBurnTargetCompleted = true;
+        meta.slowBurnRecoveryPending = false;
+        saveChatMeta();
+        toastr.success(`“${targetProgress.target}” ${targetProgress.requiredTurns}회 진행을 채웠어요. 다음 AI 답변부터는 전환할 수 있어요.`, '🫧또또SFW');
+    }
+    const completenessState = state ?? snapshotForMessage(message)?.state ?? null;
+    const completenessIssues = found ? stateCompletenessIssues(completenessState, settings) : [];
+    if (!found || completenessIssues.length) {
+        const mismatch = !found && Boolean(snapshotForMessage(message)?.state);
+        if (mismatch) diagnosticRecord('cache_invalidated', { reason: 'body_signature_mismatch', message: entry.index, swipe: currentSwipeIndex(message), ...diagnosticCache(message) });
+        const reason = found ? `상태 태그 불완전 (${completenessIssues.join(', ')})` : mismatch ? '저장 후 본문 불일치' : '상태 태그 누락';
+        console.debug(`${LOG_PREFIX} ${reason} — 보조 AI 보정 ${settings.autoRefine ? '예약' : '비활성'}`);
+        scheduleAutoRefine();
+    }
+    updateUi();
+}
+
+// ───────────────────────── UI ─────────────────────────
+
+function element(id) {
+    return document.getElementById(id);
+}
+
+let activeUiTab = 'state';
+function setTab(tab) {
+    activeUiTab = tab;
+    const box = element('tsf-popup-box');
+    if (box) box.style.setProperty('max-width', tab === 'diagnostics' ? '860px' : '460px', 'important');
+    document.querySelectorAll('#ttotto-sfw-settings [data-tsf-tab]').forEach((button) => {
+        const active = button.dataset.tsfTab === tab;
+        button.classList.toggle('is-active', active);
+        button.setAttribute('aria-selected', String(active));
+    });
+    // hidden 속성만으로는 팝업/테마 CSS와 충돌할 수 있어 인라인 스타일로도 강제한다
+    const panels = { state: element('tsf-panel-state'), diagnostics: element('tsf-panel-diagnostics'), settings: element('tsf-panel-settings') };
+    for (const [name, panel] of Object.entries(panels)) {
+        if (!panel) continue;
+        const active = name === tab;
+        panel.hidden = !active;
+        if (active) panel.style.removeProperty('display');
+        else panel.style.setProperty('display', 'none', 'important');
+    }
+}
+
+function populateProfiles() {
+    if (!uiReady) return;
+    const select = element('tsf-refine-profile');
+    const settings = getSettings();
+    const currentValue = String(settings.refineProfileId ?? '');
+    select.replaceChildren();
+    const current = document.createElement('option');
+    current.value = '';
+    current.textContent = '현재 연결 사용';
+    select.append(current);
+    try {
+        const service = getContext().ConnectionManagerRequestService;
+        const profiles = typeof service?.getSupportedProfiles === 'function' ? service.getSupportedProfiles() : [];
+        for (const profile of profiles ?? []) {
+            if (!profile?.id) continue;
+            const option = document.createElement('option');
+            option.value = String(profile.id);
+            option.textContent = String(profile.name || profile.id);
+            select.append(option);
+        }
+    } catch (error) {
+        console.warn(`${LOG_PREFIX} 연결 프로필 목록을 불러오지 못했습니다.`, error);
+    }
+    if (currentValue && ![...select.options].some((option) => option.value === currentValue)) {
+        const missing = document.createElement('option');
+        missing.value = currentValue;
+        missing.textContent = '저장된 연결 프로필을 찾을 수 없음';
+        select.append(missing);
+    }
+    select.value = currentValue;
+}
+
+function applyManualEdit(mutator) {
+    const meta = getChatMeta();
+    const { state } = stateForDisplay();
+    const base = state ? structuredClone(state) : { location: '', characters: {}, acts: [] };
+    mutator(base);
+    meta.manualState = { state: sanitizeState(base) ?? base, at: Date.now(), source: 'manual', target: currentStateTarget() };
+    saveChatMeta();
+    updateUi();
+}
+
+function renderSlowBurnPanel(settings) {
+    const card = element('tsf-slow-burn-card');
+    const developerMode = Boolean(settings.developerMode);
+    card.hidden = !settings.slowBurnEnabled && !developerMode;
+    if (card.hidden) return;
+
+    const stageHead = card.querySelector('.tsf-slow-burn-head');
+    const stageControls = card.querySelector('.tsf-slow-burn-controls');
+    if (stageHead) stageHead.hidden = !settings.slowBurnEnabled;
+    if (stageControls) stageControls.hidden = !settings.slowBurnEnabled;
+
+    const progress = slowBurnProgress(settings);
+    const targetProgress = progress.target;
+    const targetInput = element('tsf-slow-burn-target');
+    const targetTurnsInput = element('tsf-slow-burn-target-turns');
+    element('tsf-slow-burn-target-box').hidden = !developerMode;
+    element('tsf-slow-burn-target-note').hidden = !developerMode;
+    if (document.activeElement !== targetInput) targetInput.value = targetProgress.target;
+    if (document.activeElement !== targetTurnsInput) targetTurnsInput.value = String(targetProgress.requiredTurns);
+    targetInput.disabled = targetProgress.active;
+    targetTurnsInput.disabled = targetProgress.active;
+    const targetBox = targetInput.closest('.tsf-slow-burn-target-box');
+    targetBox?.classList.toggle('is-active', targetProgress.active);
+    element('tsf-slow-burn-target-start').textContent = targetProgress.active ? '↻ 처음부터 다시' : '🔥 목표 시작';
+    element('tsf-slow-burn-target-stop').disabled = !targetProgress.active;
+    element('tsf-slow-burn-target-status').textContent = targetProgress.active
+        ? `“${targetProgress.target}” · ${Math.min(targetProgress.completedTurns, targetProgress.requiredTurns)}/${targetProgress.requiredTurns}회 진행 중 · 다음 AI 답변도 이 장면을 유지`
+        : targetProgress.completed
+            ? `“${targetProgress.target}” · ${targetProgress.requiredTurns}/${targetProgress.requiredTurns}회 완료 · 다음 AI 답변부터 전환 가능`
+            : targetProgress.target
+                ? `“${targetProgress.target}”을(를) ${targetProgress.requiredTurns}회 진행할 준비가 됐어요.`
+                : '장면과 횟수를 정하면 다음 AI 답변부터 정확히 그 횟수만큼 유지해요.';
+    const sceneType = effectiveState().state?.sceneType || 'general';
+    const stage = sceneTypeDef(sceneType).stages[progress.stage];
+    const sourceLabel = {
+        manual: '수동 선택',
+        reported: 'AI 단계 감지',
+        intensity: '강도에서 감지',
+        default: '초기 단계',
+    }[progress.source] ?? '자동 감지';
+
+    element('tsf-slow-burn-stage').textContent = `${sceneTypeDef(sceneType).ko} · ${progress.stage}단계 · ${stage.ko}`;
+    const sessionText = `활성화 후 ${Math.min(progress.sessionTurns, progress.requiredTurns)}/${progress.requiredTurns}턴`;
+    const stageText = `현재 단계 ${Math.min(progress.turns, progress.requiredTurns)}/${progress.requiredTurns}턴`;
+    element('tsf-slow-burn-progress').textContent = progress.locked
+        ? `${sessionText} · ${stageText} · 단계 고정 중`
+        : progress.recoveryPending
+            ? `${sessionText} · 조기 종료 감지, 장면 이어가기 대기`
+            : `${sessionText} · ${stageText}`;
+    element('tsf-slow-burn-source').textContent = sourceLabel;
+    element('tsf-slow-burn-lock').textContent = progress.locked ? '🔓 고정 해제' : '🔒 단계 고정';
+    element('tsf-slow-burn-prev').disabled = progress.stage <= 1;
+    element('tsf-slow-burn-next').disabled = progress.stage >= 6;
+    element('tsf-slow-burn-auto').disabled = progress.source !== 'manual' && !progress.locked;
+}
+
+function renderCardLinkPanel(settings) {
+    const box = element('tsf-card-link-box');
+    if (!box) return;
+    box.hidden = !settings.cardLinkEnabled;
+    element('tsf-card-link').checked = Boolean(settings.cardLinkEnabled);
+    if (!settings.cardLinkEnabled) return;
+
+    const list = element('tsf-card-link-list');
+    const note = element('tsf-card-link-note');
+    list.replaceChildren();
+
+    const { available, rows } = cardLinkOptions();
+    if (!available) {
+        note.textContent = 'CardInject 데이터를 찾지 못했어요. CardInject를 설치하고 이 캐릭터의 캐시트를 분석한 뒤 새로고침해주세요.';
+        return;
+    }
+    if (!rows.length) {
+        note.textContent = '이 채팅 캐릭터에 저장된 CardInject 카테고리가 없어요. CardInject에서 분석하거나 직접 칸을 추가한 뒤 새로고침해주세요.';
+        return;
+    }
+
+    const selected = settings.cardLinkSelected ?? {};
+    let duplicated = 0;
+    let picked = 0;
+    for (const row of rows) {
+        const isSelected = Array.isArray(selected[row.charKey]) && selected[row.charKey].includes(row.catKey);
+        if (isSelected) {
+            picked++;
+            if (row.ciEnabled) duplicated++;
+        }
+        const label = document.createElement('label');
+        label.className = 'tsf-setting-row tsf-card-link-row';
+        const text = document.createElement('span');
+        const title = document.createElement('strong');
+        title.textContent = `${row.charName} · ${row.name}${row.likely ? ' ★' : ''}`;
+        const meta = document.createElement('small');
+        meta.textContent = `${row.content.length}자 · CardInject에서 ${row.ciEnabled ? '켜져 있음' : '꺼져 있음'}`;
+        text.append(title, meta);
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = isSelected;
+        input.addEventListener('change', () => {
+            const current = getSettings();
+            const chosen = new Set(Array.isArray(current.cardLinkSelected[row.charKey]) ? current.cardLinkSelected[row.charKey] : []);
+            if (input.checked) chosen.add(row.catKey);
+            else chosen.delete(row.catKey);
+            current.cardLinkSelected[row.charKey] = [...chosen];
+            saveSettings();
+            updateUi();
+        });
+        label.append(text, input);
+        list.append(label);
+    }
+    note.textContent = duplicated
+        ? `⚠️ 고른 ${picked}개 중 ${duplicated}개가 CardInject에서도 켜져 있어서 프롬프트에 두 번 들어가요. CardInject에서 그 카테고리를 끄면 개입 중일 때만 주입돼요. (★ = 이름이 성향·취향 관련처럼 보이는 카테고리)`
+        : `고른 ${picked}개는 개입 중일 때만 주입돼요. (★ = 이름이 성향·취향 관련처럼 보이는 카테고리)`;
+}
+
+function renderStatePanel() {
+    const { state, source } = stateForDisplay();
+    const settings = getSettings();
+    renderSlowBurnPanel(settings);
+    renderCardLinkPanel(settings);
+    const sourceLabel = { 'body-changed': '저장 후 본문 변경 · 이전 수집값 표시 (현재 상태 미확인)', tag: '응답 태그에서 추적됨', 'ai-refine': '보조 AI 보정 결과', manual: '수동 수정됨', 'nsfw-resume': settings.autoRefine ? '최신 장면 수집 대기' : '최신 장면 수집 대기 · 자동 보정 꺼짐', 'missing-report': '최신 상태 보고 누락 · 상태 다시 분석으로 복구 가능 (추가 AI 호출)', none: '아직 기록 없음' }[source] ?? source;
+    const failed = refineFailure?.metadata === getContext().chatMetadata
+        && sameRefineTarget(refineFailure.target, latestAssistantTarget());
+    element('tsf-state-source').textContent = refineRunning ? '보조 AI 분석 중…'
+        : failed ? '최신 장면 보정 실패 · 상태 다시 분석으로 재시도' : sourceLabel;
+
+    const intensityBadge = element('tsf-intensity');
+    if (state?.intensity !== null && state?.intensity !== undefined) {
+        intensityBadge.hidden = false;
+        intensityBadge.textContent = `📈 서사 강도 ${state.intensity}/10`;
+        intensityBadge.title = '일반 장면의 긴장·진행 강도입니다. NSFW의 성적 온도와 다른 값입니다.';
+        intensityBadge.classList.toggle('is-hot', state.intensity >= INTENSITY_HIGH);
+    } else {
+        intensityBadge.hidden = true;
+    }
+
+    const locationInput = element('tsf-state-location');
+    if (document.activeElement !== locationInput) locationInput.value = biText(state?.location);
+
+    const sceneTypeInput = element('tsf-state-scene-type');
+    if (document.activeElement !== sceneTypeInput) sceneTypeInput.value = state?.sceneType || 'general';
+    const timeInput = element('tsf-state-time');
+    if (document.activeElement !== timeInput) timeInput.value = biText(state?.time);
+    const environmentInput = element('tsf-state-environment');
+    if (document.activeElement !== environmentInput) environmentInput.value = biText(state?.environment);
+
+    const objectList = element('tsf-object-list');
+    objectList.replaceChildren();
+    const importantObjects = state?.importantObjects ?? {};
+    for (const [name, objectState] of Object.entries(importantObjects)) {
+        const row = document.createElement('label');
+        row.className = 'tsf-char-field';
+        const caption = document.createElement('span');
+        caption.textContent = name;
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'text_pole';
+        input.value = biText(objectState);
+        input.addEventListener('change', () => {
+            applyManualEdit((draft) => {
+                if (!draft.importantObjects || typeof draft.importantObjects !== 'object') draft.importantObjects = {};
+                draft.importantObjects[name] = input.value;
+            });
+        });
+        row.append(caption, input);
+        objectList.append(row);
+    }
+    element('tsf-object-empty').hidden = Object.keys(importantObjects).length > 0;
+
+    const list = element('tsf-char-list');
+    list.replaceChildren();
+    const characters = state?.characters ?? {};
+    for (const [name, info] of Object.entries(characters)) {
+        const row = document.createElement('div');
+        row.className = 'tsf-char-row';
+        const title = document.createElement('strong');
+        title.textContent = name;
+        row.append(title);
+        for (const [field, label] of [['appearance', '외형·복장'], ['position', '자세·위치'], ['holding', '소지품'], ['condition', '신체 상태']]) {
+            const wrap = document.createElement('label');
+            wrap.className = 'tsf-char-field';
+            const caption = document.createElement('span');
+            caption.textContent = label;
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'text_pole';
+            input.value = biText(info[field]);
+            input.addEventListener('change', () => {
+                applyManualEdit((draft) => {
+                    if (!draft.characters[name]) draft.characters[name] = { appearance: '', position: '', holding: '', condition: '' };
+                    draft.characters[name][field] = input.value;
+                });
+            });
+            wrap.append(caption, input);
+            row.append(wrap);
+        }
+        list.append(row);
+    }
+    element('tsf-char-empty').hidden = Object.keys(characters).length > 0;
+
+    const actsList = element('tsf-acts-list');
+    actsList.replaceChildren();
+    const rows = recentActs(Number(settings.repeatWindow) || DEFAULT_SETTINGS.repeatWindow);
+    for (const row of rows) {
+        for (const act of row.acts) {
+            const chip = document.createElement('span');
+            chip.className = 'tsf-act-chip';
+            const text = document.createElement('span');
+            text.textContent = biText(act);
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.title = '이 항목은 반복 금지에서 제외';
+            remove.textContent = '×';
+            remove.addEventListener('click', () => {
+                const meta = getChatMeta();
+                for (const key of [biText(act, 'en'), biText(act, 'ko')]) {
+                    if (key && !meta.ignoredActs.includes(key)) meta.ignoredActs.push(key);
+                }
+                saveChatMeta();
+                updateUi();
+            });
+            chip.append(text, remove);
+            actsList.append(chip);
+        }
+    }
+    element('tsf-acts-empty').hidden = !settings.repeatGuard || rows.length > 0;
+    element('tsf-acts-summary').textContent = settings.repeatGuard ? `최근 ${settings.repeatWindow}턴 기준` : '기능 꺼짐';
+
+    // 개발자 실험실: 최근 대사 의도 목록
+    const dialogueSection = element('tsf-dialogue-section');
+    const dialogueEnabled = Boolean(settings.dialogueBeatGuard);
+    const dialogueSummary = element('tsf-dialogue-summary');
+    if (dialogueSummary) dialogueSummary.textContent = `최근 ${settings.dialogueWindow}개의 AI 답변에서 이미 사용한 대사의 목적이에요.`;
+    dialogueSection.hidden = !dialogueEnabled;
+    const dialogueList = element('tsf-dialogue-list');
+    dialogueList.replaceChildren();
+    const dialogueRows = dialogueEnabled ? recentDialogueBeats() : [];
+    for (const row of dialogueRows) {
+        for (const beat of row.beats) {
+            const chip = document.createElement('span');
+            chip.className = 'tsf-act-chip';
+            const text = document.createElement('span');
+            text.textContent = biText(beat);
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.title = '이 대사 의도는 반복 금지에서 제외';
+            remove.textContent = '×';
+            remove.addEventListener('click', () => {
+                const meta = getChatMeta();
+                for (const key of [biText(beat, 'en'), biText(beat, 'ko')]) {
+                    if (key && !meta.ignoredDialogueBeats.includes(key)) meta.ignoredDialogueBeats.push(key);
+                }
+                saveChatMeta();
+                updateUi();
+            });
+            chip.append(text, remove);
+            dialogueList.append(chip);
+        }
+    }
+    element('tsf-dialogue-empty').hidden = dialogueRows.length > 0;
+
+    const dialogueFlowSection = element('tsf-dialogue-flow-section');
+    dialogueFlowSection.hidden = !settings.dialogueFlow;
+    if (settings.dialogueFlow) {
+        const topicInput = element('tsf-state-topic');
+        const questionInput = element('tsf-state-question');
+        if (document.activeElement !== topicInput) topicInput.value = biText(state?.dialogueFlow?.topic);
+        if (document.activeElement !== questionInput) questionInput.value = biText(state?.dialogueFlow?.lastQuestion);
+        const factsList = element('tsf-new-facts-list');
+        factsList.replaceChildren();
+        const facts = state?.dialogueFlow?.newFacts ?? [];
+        for (const fact of facts) {
+            const chip = document.createElement('span');
+            chip.className = 'tsf-act-chip';
+            chip.textContent = biText(fact);
+            factsList.append(chip);
+        }
+        element('tsf-new-facts-empty').hidden = facts.length > 0;
+    }
+
+    // 다음 전개 후보
+    const nextList = element('tsf-next-list');
+    nextList.replaceChildren();
+    const targetActive = slowBurnTargetProgress().active;
+    const beats = settings.nextBeatHints && !targetActive ? nextBeatCandidates({ forDisplay: true }) : [];
+    for (const beat of beats) {
+        const chip = document.createElement('span');
+        chip.className = 'tsf-act-chip tsf-next-chip';
+        const text = document.createElement('span');
+        text.textContent = biText(beat);
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.title = '이 후보는 제안에서 제외';
+        remove.textContent = '×';
+        remove.addEventListener('click', () => {
+            const meta = getChatMeta();
+            for (const key of [biText(beat, 'en'), biText(beat, 'ko')]) {
+                if (key && !meta.ignoredActs.includes(key)) meta.ignoredActs.push(key);
+            }
+            saveChatMeta();
+            updateUi();
+        });
+        chip.append(text, remove);
+        nextList.append(chip);
+    }
+    const nextSection = element('tsf-next-section');
+    nextSection.hidden = !settings.nextBeatHints || targetActive;
+    element('tsf-next-empty').hidden = !settings.nextBeatHints || targetActive || beats.length > 0;
+    element('tsf-next-source').textContent = nextBeatReport({ forDisplay: true }).source === 'body-changed'
+        ? '최신 답변에 저장된 후보 · 저장 후 본문 변경으로 현재 적용 보류'
+        : beats.length ? '최신 답변에서 수집한 후보' : '최신 답변의 전개 후보 없음 · 과거 후보는 재사용하지 않아요.';
+
+    // 수동 금지 목록
+    const customList = element('tsf-custom-ban-list');
+    customList.replaceChildren();
+    const meta = getChatMeta(false);
+    for (const ban of meta?.customBans ?? []) {
+        const chip = document.createElement('span');
+        chip.className = 'tsf-act-chip tsf-custom-chip';
+        const text = document.createElement('span');
+        text.textContent = ban;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.title = '금지 해제';
+        remove.textContent = '×';
+        remove.addEventListener('click', () => {
+            const chatMeta = getChatMeta();
+            chatMeta.customBans = chatMeta.customBans.filter((item) => item !== ban);
+            saveChatMeta();
+            updateUi();
+        });
+        chip.append(text, remove);
+        customList.append(chip);
+    }
+
+    // 전역 하드 리밋 목록
+    const globalList = element('tsf-global-ban-list');
+    globalList.replaceChildren();
+    for (const ban of settings.globalBans ?? []) {
+        const chip = document.createElement('span');
+        chip.className = 'tsf-act-chip tsf-custom-chip';
+        const text = document.createElement('span');
+        text.textContent = ban;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.title = '하드 리밋 해제';
+        remove.textContent = '×';
+        remove.addEventListener('click', () => {
+            const current = getSettings();
+            current.globalBans = (current.globalBans ?? []).filter((item) => item !== ban);
+            saveSettings();
+            updateUi();
+        });
+        chip.append(text, remove);
+        globalList.append(chip);
+    }
+
+}
+
+// ───────────────────────── 주입문 크기 표시 (글자 수 + 토큰 수) ─────────────────────────
+// 토큰 수는 ST에 지금 설정된 토크나이저로 세고, 못 세면 대략치(약)로 보여준다.
+let promptTokenSeq = 0;
+let promptTokenCache = { text: null, label: '' };
+
+function estimateTokens(text) {
+    let ascii = 0;
+    let other = 0;
+    for (const char of String(text ?? '')) {
+        if (char.charCodeAt(0) < 128) ascii++;
+        else other++;
+    }
+    return Math.ceil(ascii / 4 + other * 1.5);
+}
+
+async function countPromptTokens(text) {
+    const context = getContext();
+    const counter = context.getTokenCountAsync ?? context.getTokenCount;
+    if (typeof counter === 'function') {
+        try {
+            const value = Number(await counter.call(context, text));
+            if (Number.isFinite(value) && value >= 0) return { count: Math.round(value), exact: true };
+        } catch (error) {
+            console.debug(`${LOG_PREFIX} 토큰 계산 실패 — 대략치로 표시`, error);
+        }
+    }
+    return { count: estimateTokens(text), exact: false };
+}
+
+function refreshPromptSize(prompt) {
+    const sizeElement = element('tsf-prompt-size');
+    if (!sizeElement) return;
+    const chars = String(prompt ?? '').length;
+    if (!chars) {
+        promptTokenSeq++;
+        sizeElement.textContent = '0자 · 0토큰';
+        return;
+    }
+    const charLabel = `${chars.toLocaleString()}자`;
+    if (promptTokenCache.text === prompt) {
+        sizeElement.textContent = `${charLabel} · ${promptTokenCache.label}`;
+        return;
+    }
+    // 정확한 값이 오기 전까지는 대략치를 먼저 보여줘서 깜빡이지 않게 한다.
+    sizeElement.textContent = `${charLabel} · 약 ${estimateTokens(prompt).toLocaleString()}토큰`;
+    const seq = ++promptTokenSeq;
+    void countPromptTokens(prompt).then(({ count, exact }) => {
+        if (seq !== promptTokenSeq) return;
+        const label = `${exact ? '' : '약 '}${count.toLocaleString()}토큰`;
+        promptTokenCache = { text: prompt, label };
+        const current = element('tsf-prompt-size');
+        if (current) current.textContent = `${charLabel} · ${label}`;
+    });
+}
+
+function updateUi() {
+    if (!uiReady) return;
+    try {
+        const settings = getSettings();
+        // 새 채팅에서도 기본 ON 상태를 즉시 만들고 저장한다.
+        const meta = getChatMeta();
+        if (meta?.enabled) syncNsfwSuspension();
+        const nsfwSuspended = Boolean(meta?.nsfwSuspended);
+
+        const popupTitle = element('tsf-popup-title');
+        if (popupTitle) popupTitle.textContent = settings.developerMode ? '🫧 또또SFW 🧪' : '🫧 또또SFW';
+        element('tsf-header-title').textContent = settings.developerMode ? '또또SFW 🧪' : '또또SFW';
+
+        element('tsf-diagnostics-enabled').checked = Boolean(settings.diagnosticsEnabled);
+        renderDiagnostics();
+        element('tsf-enabled').checked = Boolean(settings.enabled);
+        element('tsf-chat-enabled').checked = Boolean(meta?.enabled);
+        element('tsf-feature-preset').value = String(settings.featurePreset);
+        element('tsf-repeat-guard').checked = Boolean(settings.repeatGuard);
+        element('tsf-dialogue-flow').checked = Boolean(settings.dialogueFlow);
+        element('tsf-transition-guard').checked = Boolean(settings.transitionGuard);
+        element('tsf-repeat-window').value = String(settings.repeatWindow);
+        element('tsf-repeat-window').disabled = !settings.repeatGuard;
+        element('tsf-repeat-window-value').textContent = `${settings.repeatWindow}턴`;
+        element('tsf-max-banned').value = String(settings.maxBannedActs);
+        element('tsf-max-banned').disabled = !settings.repeatGuard;
+        element('tsf-max-banned-value').textContent = `${settings.maxBannedActs}개`;
+        element('tsf-pace-mode').value = String(settings.paceMode);
+        element('tsf-pace-mode').disabled = Boolean(settings.slowBurnEnabled);
+        element('tsf-pace-mode-note').textContent = settings.slowBurnEnabled
+            ? '슬로우번이 켜져 있어 현재는 단계별 진행 제한이 대신 적용돼요.'
+            : '슬로우번을 켜면 이 설정 대신 단계별 진행 제한이 적용돼요.';
+        element('tsf-slow-burn-enabled').checked = Boolean(settings.slowBurnEnabled);
+        element('tsf-slow-burn-intensity').value = String(settings.slowBurnIntensity);
+        element('tsf-slow-burn-intensity').disabled = !settings.slowBurnEnabled;
+        element('tsf-slow-burn-user-override').checked = Boolean(settings.slowBurnUserOverride);
+        element('tsf-slow-burn-user-override').disabled = !settings.slowBurnEnabled;
+        element('tsf-style-length').value = String(settings.styleLength);
+        element('tsf-style-balance').value = String(settings.styleBalance);
+        element('tsf-exit-bridge').checked = Boolean(settings.exitBridge);
+        element('tsf-next-hints').checked = Boolean(settings.nextBeatHints);
+        element('tsf-dialogue-guard').checked = Boolean(settings.dialogueBeatGuard);
+        element('tsf-dialogue-window').value = String(settings.dialogueWindow);
+        element('tsf-dialogue-window').disabled = !settings.dialogueBeatGuard;
+        element('tsf-dialogue-window-value').textContent = `${settings.dialogueWindow}개`;
+        element('tsf-auto-refine').checked = Boolean(settings.autoRefine);
+        const authSelect = element('tsf-refine-vertex-auth');
+        if (authSelect) {
+            authSelect.value = ['express', 'full'].includes(settings.refineVertexAuthMode) ? settings.refineVertexAuthMode : 'profile';
+            authSelect.disabled = !String(settings.refineProfileId ?? '').trim();
+        }
+
+        const armed = isSupervising();
+        element('tsf-header-status').textContent = !settings.enabled
+            ? '꺼져 있어요'
+            : !meta?.enabled
+                ? '이 채팅에서는 쉬는 중'
+                : nsfwSuspended
+                    ? 'NSFW 장면이라 자동 대기 중이에요'
+                : refineRunning
+                    ? '보조 AI 분석 중…'
+                    : '장면을 지켜보는 중이에요';
+
+        element('tsf-refine').disabled = refineRunning || nsfwSuspended;
+        element('tsf-refine-label').textContent = ['missing-report', 'body-changed'].includes(effectiveState().source)
+            ? '누락·변경 상태 복구' : '상태 다시 분석';
+        element('tsf-refine').title = '선택한 보정 연결로 최신 답변을 분석합니다. 추가 AI 호출 비용이 발생합니다.';
+        element('tsf-force-arm-label').textContent = isSupervising() ? '개입 해제' : '지금 개입';
+        renderStatePanel();
+
+        const preview = element('tsf-prompt-preview');
+        if (!preview.hidden) {
+            const prompt = armed ? buildInjection() : '';
+            element('tsf-prompt-text').textContent = prompt || '(지금은 주입할 내용이 없어요)';
+            refreshPromptSize(prompt);
+        }
+    } catch (error) {
+        console.error(`${LOG_PREFIX} UI 갱신 실패`, error);
+    }
+}
+
+function bindSetting(id, key, parser = (value) => value, after = null) {
+    element(id).addEventListener('change', () => {
+        const target = element(id);
+        const value = target.type === 'checkbox' ? target.checked : target.value;
+        const settings = getSettings();
+        settings[key] = parser(value);
+        if (typeof after === 'function') after(settings);
+        saveSettings();
+        if (!settings.enabled) clearInjectedPrompt();
+        updateUi();
+    });
+}
+
+function bindUi() {
+    bindSetting('tsf-diagnostics-enabled', 'diagnosticsEnabled', Boolean, () => {
+        diagnosticRecord('recording_started', diagnosticState());
+        renderDiagnostics();
+    });
+    element('tsf-diagnostic-copy').addEventListener('click', () => { void copyDiagnostics(); });
+    element('tsf-diagnostic-download').addEventListener('click', downloadDiagnostics);
+    element('tsf-diagnostic-clear').addEventListener('click', clearDiagnostics);
+    // 탭 클릭은 루트 위임으로 — 패널이 팝업으로 이동해도, 어떤 환경에서도 확실히 잡힌다
+    const root = document.getElementById('ttotto-sfw-settings');
+    element('tsf-header-title').addEventListener('click', handleDeveloperTitleTap);
+    root.addEventListener('click', (event) => {
+        const button = event.target?.closest?.('[data-tsf-tab]');
+        if (button && root.contains(button)) {
+            event.preventDefault();
+            event.stopPropagation();
+            setTab(button.dataset.tsfTab);
+        }
+    });
+
+    const syncSlowBurnSession = (settings) => {
+        const meta = getChatMeta(false);
+        if (!meta) return;
+        resetSlowBurnSession(meta);
+        saveChatMeta();
+        if (settings.enabled && settings.slowBurnEnabled && isFullyArmed()) startSlowBurnSessionIfNeeded();
+    };
+    bindSetting('tsf-enabled', 'enabled', Boolean, syncSlowBurnSession);
+    element('tsf-feature-preset').addEventListener('change', () => {
+        const preset = element('tsf-feature-preset').value;
+        const settings = getSettings();
+        if (preset === 'custom') {
+            settings.featurePreset = 'custom';
+            saveSettings();
+            updateUi();
+            return;
+        } else {
+            applyFeaturePreset(settings, preset);
+        }
+        saveSettings();
+        syncSlowBurnSession(settings);
+        updateUi();
+    });
+    bindSetting('tsf-transition-guard', 'transitionGuard', Boolean, markFeaturePresetCustom);
+    bindSetting('tsf-repeat-guard', 'repeatGuard', Boolean, markFeaturePresetCustom);
+    bindSetting('tsf-next-hints', 'nextBeatHints', Boolean, markFeaturePresetCustom);
+    bindSetting('tsf-dialogue-guard', 'dialogueBeatGuard', Boolean, markFeaturePresetCustom);
+    bindSetting('tsf-dialogue-flow', 'dialogueFlow', Boolean, markFeaturePresetCustom);
+    bindSetting('tsf-card-link', 'cardLinkEnabled', Boolean);
+    element('tsf-card-link-refresh').addEventListener('click', () => {
+        updateUi();
+        toastr.info('CardInject 카테고리 목록을 다시 읽었어요.', '🫧또또SFW');
+    });
+    const dialogueSlider = element('tsf-dialogue-window');
+    dialogueSlider.addEventListener('input', () => {
+        element('tsf-dialogue-window-value').textContent = `${dialogueSlider.value}개`;
+    });
+    dialogueSlider.addEventListener('change', () => {
+        const settings = getSettings();
+        settings.dialogueWindow = Math.min(6, Math.max(1, Number(dialogueSlider.value) || DIALOGUE_BEAT_WINDOW));
+        saveSettings();
+        updateUi();
+    });
+    bindSetting('tsf-pace-mode', 'paceMode', String);
+    bindSetting('tsf-slow-burn-enabled', 'slowBurnEnabled', Boolean, (settings) => {
+        markFeaturePresetCustom(settings);
+        const meta = getChatMeta(false);
+        if (!meta) return;
+        resetSlowBurnSession(meta);
+        saveChatMeta();
+        if (settings.slowBurnEnabled && isFullyArmed()) startSlowBurnSessionIfNeeded();
+    });
+    bindSetting('tsf-slow-burn-intensity', 'slowBurnIntensity', String);
+    bindSetting('tsf-slow-burn-user-override', 'slowBurnUserOverride', Boolean);
+    bindSetting('tsf-style-length', 'styleLength', String);
+    bindSetting('tsf-style-balance', 'styleBalance', String);
+    bindSetting('tsf-exit-bridge', 'exitBridge', Boolean);
+    bindSetting('tsf-auto-refine', 'autoRefine', Boolean);
+    bindSetting('tsf-refine-profile', 'refineProfileId', String);
+    bindSetting('tsf-refine-vertex-auth', 'refineVertexAuthMode', String);
+
+    const slider = element('tsf-repeat-window');
+    slider.addEventListener('input', () => {
+        element('tsf-repeat-window-value').textContent = `${slider.value}턴`;
+    });
+    slider.addEventListener('change', () => {
+        const settings = getSettings();
+        settings.repeatWindow = Math.min(10, Math.max(1, Number(slider.value) || DEFAULT_SETTINGS.repeatWindow));
+        saveSettings();
+        updateUi();
+    });
+
+    const maxBannedSlider = element('tsf-max-banned');
+    maxBannedSlider.addEventListener('input', () => {
+        element('tsf-max-banned-value').textContent = `${maxBannedSlider.value}개`;
+    });
+    maxBannedSlider.addEventListener('change', () => {
+        const settings = getSettings();
+        settings.maxBannedActs = Math.min(30, Math.max(5, Number(maxBannedSlider.value) || DEFAULT_SETTINGS.maxBannedActs));
+        saveSettings();
+        updateUi();
+    });
+
+    element('tsf-chat-enabled').addEventListener('change', () => {
+        const meta = getChatMeta();
+        const wasEnabled = Boolean(meta.enabled);
+        meta.enabled = element('tsf-chat-enabled').checked;
+        if (wasEnabled && !meta.enabled) {
+            meta.bridgePending = Boolean(getSettings().exitBridge);
+            meta.autoArmed = false;
+            meta.nsfwSuspended = false;
+            meta.nsfwResumePending = false;
+            meta.nsfwDelegatedAtAssistantCount = null;
+            meta.nsfwDetectionCooldownFrom = 0;
+        } else if (meta.enabled) {
+            meta.bridgePending = false;
+            syncNsfwSuspension();
+        }
+        resetSlowBurnSession(meta);
+        saveChatMeta();
+        if (!meta.enabled) clearInjectedPrompt();
+        else if (getSettings().slowBurnEnabled && isFullyArmed()) startSlowBurnSessionIfNeeded();
+        updateUi();
+    });
+
+    element('tsf-state-location').addEventListener('change', () => {
+        applyManualEdit((draft) => { draft.location = element('tsf-state-location').value; });
+    });
+    element('tsf-state-scene-type').addEventListener('change', () => {
+        applyManualEdit((draft) => { draft.sceneType = element('tsf-state-scene-type').value; });
+    });
+    element('tsf-state-time').addEventListener('change', () => {
+        applyManualEdit((draft) => { draft.time = element('tsf-state-time').value; });
+    });
+    element('tsf-state-environment').addEventListener('change', () => {
+        applyManualEdit((draft) => { draft.environment = element('tsf-state-environment').value; });
+    });
+    element('tsf-state-topic').addEventListener('change', () => {
+        applyManualEdit((draft) => {
+            if (!draft.dialogueFlow || typeof draft.dialogueFlow !== 'object') draft.dialogueFlow = {};
+            draft.dialogueFlow.topic = element('tsf-state-topic').value;
+        });
+    });
+    element('tsf-state-question').addEventListener('change', () => {
+        applyManualEdit((draft) => {
+            if (!draft.dialogueFlow || typeof draft.dialogueFlow !== 'object') draft.dialogueFlow = {};
+            draft.dialogueFlow.lastQuestion = element('tsf-state-question').value;
+        });
+    });
+
+    element('tsf-refine').addEventListener('click', () => { void runRefine({ manual: true }); });
+    element('tsf-force-arm').addEventListener('click', forceToggleArm);
+
+    const saveSlowBurnTargetDraft = () => {
+        if (!getSettings().developerMode) return;
+        const meta = getChatMeta();
+        meta.slowBurnTarget = sanitizeSlowBurnTarget(element('tsf-slow-burn-target').value);
+        meta.slowBurnTargetTurns = clampSlowBurnTargetTurns(element('tsf-slow-burn-target-turns').value);
+        meta.slowBurnTargetCompleted = false;
+        saveChatMeta();
+        updateUi();
+    };
+    element('tsf-slow-burn-target').addEventListener('change', saveSlowBurnTargetDraft);
+    element('tsf-slow-burn-target-turns').addEventListener('change', saveSlowBurnTargetDraft);
+    element('tsf-slow-burn-target').addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            element('tsf-slow-burn-target-start').click();
+        }
+    });
+    element('tsf-slow-burn-target-start').addEventListener('click', () => {
+        const settings = getSettings();
+        if (!settings.developerMode) return;
+        const target = sanitizeSlowBurnTarget(element('tsf-slow-burn-target').value);
+        const turns = clampSlowBurnTargetTurns(element('tsf-slow-burn-target-turns').value);
+        if (!target) {
+            toastr.warning('보고 싶은 장면을 먼저 입력해주세요. 예: 화해', '🫧또또SFW');
+            element('tsf-slow-burn-target').focus();
+            return;
+        }
+        if (!settings.enabled) {
+            toastr.warning('전체 사용을 먼저 켜주세요.', '🫧또또SFW');
+            return;
+        }
+        if (!settings.slowBurnEnabled) {
+            settings.slowBurnEnabled = true;
+            settings.featurePreset = 'custom';
+            saveSettings();
+        }
+        const meta = getChatMeta();
+        resetSlowBurnSession(meta);
+        meta.enabled = true;
+        meta.bridgePending = false;
+        meta.slowBurnTarget = target;
+        meta.slowBurnTargetTurns = turns;
+        meta.slowBurnTargetActive = true;
+        meta.slowBurnTargetCompleted = false;
+        meta.autoArmed = true;
+        saveChatMeta();
+        startSlowBurnSessionIfNeeded();
+        toastr.success(`“${target}” 장면을 다음 AI 답변부터 ${turns}회 유지해요.`, '🫧또또SFW');
+        updateUi();
+    });
+    element('tsf-slow-burn-target-stop').addEventListener('click', () => {
+        if (!getSettings().developerMode) return;
+        const meta = getChatMeta();
+        meta.slowBurnTargetActive = false;
+        meta.slowBurnTargetCompleted = false;
+        meta.slowBurnRecoveryPending = false;
+        saveChatMeta();
+        toastr.info('목표 장면 진행을 중지했어요. 기본 슬로우번은 계속 적용돼요.', '🫧또또SFW');
+        updateUi();
+    });
+
+    const setSlowBurnStage = (offset) => {
+        const meta = getChatMeta();
+        const current = slowBurnStageInfo().stage;
+        meta.slowBurnStageOverride = Math.max(1, Math.min(6, current + offset));
+        saveChatMeta();
+        updateUi();
+    };
+    element('tsf-slow-burn-prev').addEventListener('click', () => setSlowBurnStage(-1));
+    element('tsf-slow-burn-next').addEventListener('click', () => setSlowBurnStage(1));
+    element('tsf-slow-burn-lock').addEventListener('click', () => {
+        const meta = getChatMeta();
+        if (meta.slowBurnLocked) {
+            meta.slowBurnLocked = false;
+            meta.slowBurnStageOverride = null;
+        } else {
+            meta.slowBurnStageOverride = slowBurnStageInfo().stage;
+            meta.slowBurnLocked = true;
+        }
+        saveChatMeta();
+        updateUi();
+    });
+    element('tsf-slow-burn-auto').addEventListener('click', () => {
+        const meta = getChatMeta();
+        meta.slowBurnStageOverride = null;
+        meta.slowBurnLocked = false;
+        resetSlowBurnSession(meta);
+        saveChatMeta();
+        updateUi();
+    });
+
+    const addGlobalBan = () => {
+        const input = element('tsf-global-ban-input');
+        const value = input.value.trim();
+        if (!value) return;
+        const settings = getSettings();
+        if (!Array.isArray(settings.globalBans)) settings.globalBans = [];
+        if (!settings.globalBans.includes(value)) settings.globalBans.push(value);
+        input.value = '';
+        saveSettings();
+        updateUi();
+    };
+    element('tsf-global-ban-add').addEventListener('click', addGlobalBan);
+    element('tsf-global-ban-input').addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') { event.preventDefault(); addGlobalBan(); }
+    });
+
+    const addCustomBan = () => {
+        const input = element('tsf-custom-ban-input');
+        const value = input.value.trim();
+        if (!value) return;
+        const meta = getChatMeta();
+        if (!meta.customBans.includes(value)) meta.customBans.push(value);
+        input.value = '';
+        saveChatMeta();
+        updateUi();
+    };
+    element('tsf-custom-ban-add').addEventListener('click', addCustomBan);
+    element('tsf-custom-ban-input').addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') { event.preventDefault(); addCustomBan(); }
+    });
+
+    element('tsf-clear-state').addEventListener('click', () => {
+        const meta = getChatMeta();
+        meta.manualState = null;
+        meta.ignoredActs = [];
+        meta.ignoredDialogueBeats = [];
+        meta.slowBurnStageOverride = null;
+        meta.slowBurnLocked = false;
+        for (const message of assistantMessages()) {
+            const store = getMessageStore(message, false);
+            if (store) delete message.extra[MESSAGE_EXTRA_KEY];
+        }
+        saveChatMeta();
+        persistChat();
+        toastr.info('이 채팅의 장면 기록을 비웠어요.', '🫧또또SFW');
+        updateUi();
+    });
+
+    element('tsf-toggle-preview').addEventListener('click', () => {
+        const preview = element('tsf-prompt-preview');
+        preview.hidden = !preview.hidden;
+        element('tsf-toggle-preview').textContent = preview.hidden ? '주입문 보기' : '주입문 접기';
+        updateUi();
+    });
+}
+
+// ───────────────────────── 팝업 (완드 메뉴 빠른 접근) ─────────────────────────
+// 설정 패널 DOM을 통째로 팝업으로 옮겼다가 닫을 때 되돌린다 — 모든 기능·바인딩이 그대로 동작.
+// 모바일 우선: 중앙 고정과 가로 스크롤 차단을 열 때마다 인라인 !important로 강제한다.
+// (MovingUI의 transform 및 실리태번 테마의 전역 CSS 오버라이드 대응)
+
+const TSF_OVERLAY_BASE_CSS = [
+    'position:fixed !important', 'top:0 !important', 'left:0 !important', 'right:0 !important',
+    'bottom:0 !important', 'width:100vw !important', 'height:100vh !important', 'margin:0 !important',
+    'padding:16px !important', 'box-sizing:border-box !important', 'z-index:99990 !important',
+    'background-color:rgba(12,12,16,0.55) !important', 'align-items:center !important',
+    'justify-content:center !important', 'transform:none !important', '-webkit-transform:none !important',
+].join('; ');
+
+const TSF_POPUP_BOX_CSS = [
+    'box-sizing:border-box !important', 'width:100% !important', 'min-width:0 !important',
+    'max-width:460px !important', 'max-height:88vh !important', 'display:flex !important',
+    'flex-direction:column !important', 'position:relative !important', 'z-index:99991 !important',
+    'border-radius:14px !important', 'overflow:hidden !important', 'margin:0 auto !important',
+    'transform:none !important', 'background-color:var(--SmartThemeBlurTintColor, #1b1b22) !important',
+    'color:var(--SmartThemeBodyColor, #ddd) !important',
+    'border:1px solid rgba(128,128,128,0.35) !important',
+    'box-shadow:0 16px 40px rgba(0,0,0,0.4) !important',
+].join('; ');
+
+function buildPopupShell() {
+    if (document.getElementById('tsf-overlay')) return;
+    const overlay = document.createElement('div');
+    overlay.id = 'tsf-overlay';
+    overlay.className = 'tsf-overlay';
+    overlay.innerHTML = [
+        '<div id="tsf-popup-box" class="tsf-popup">',
+        '  <div class="tsf-popup-header">',
+        '    <strong id="tsf-popup-title">🫧 또또SFW</strong>',
+        '    <button id="tsf-popup-close" class="menu_button" type="button" title="닫기">✕</button>',
+        '  </div>',
+        '  <div id="tsf-popup-body" class="tsf-popup-body"></div>',
+        '</div>',
+    ].join('\n');
+    // MovingUI가 body에 transform을 걸어 fixed가 깨지는 문제: 오버레이 자체에 transform 리셋으로 대응 (킨크 추출기와 동일)
+    document.body.append(overlay);
+    overlay.addEventListener('click', (event) => {
+        if (event.target === overlay) closePopup();
+    });
+    overlay.querySelector('#tsf-popup-close').addEventListener('click', closePopup);
+    overlay.querySelector('#tsf-popup-title').addEventListener('click', handleDeveloperTitleTap);
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && popupOpen) closePopup();
+    });
+}
+
+function openPopup() {
+    if (!uiReady) {
+        toastr.warning('설정 패널이 아직 준비되지 않았어요. 잠시 후 다시 열어주세요.', '🫧또또SFW');
+        return;
+    }
+    buildPopupShell();
+    const panel = document.getElementById('ttotto-sfw-settings');
+    const overlay = document.getElementById('tsf-overlay');
+    const box = document.getElementById('tsf-popup-box');
+    if (!panel || !overlay || !box) return;
+    settingsHomeParent = ensureSettingsHome();
+    document.getElementById('tsf-popup-body').append(panel);
+    panel.classList.add('tsf-in-popup');
+    panel.hidden = false;
+    // 드로어가 접혀 있었어도 팝업에서는 무조건 펼침 (인라인 강제)
+    const drawerContent = panel.querySelector('.inline-drawer-content');
+    if (drawerContent) drawerContent.style.setProperty('display', 'block', 'important');
+    overlay.style.cssText = `display:flex !important; ${TSF_OVERLAY_BASE_CSS}`;
+    box.style.cssText = TSF_POPUP_BOX_CSS;
+    const header = box.querySelector('.tsf-popup-header');
+    if (header) header.style.cssText = 'display:flex !important; align-items:center !important; justify-content:space-between !important; gap:8px !important; padding:10px 14px !important; border-bottom:1px solid rgba(128,128,128,0.25) !important; flex-shrink:0 !important;';
+    const body = document.getElementById('tsf-popup-body');
+    if (body) body.style.cssText = 'box-sizing:border-box !important; width:100% !important; min-width:0 !important; max-width:100% !important; overflow-y:auto !important; overflow-x:hidden !important; overscroll-behavior-x:none !important; touch-action:pan-y !important; padding:8px 14px 14px !important; -webkit-overflow-scrolling:touch;';
+    popupOpen = true;
+    setTab(activeUiTab);
+    updateUi();
+}
+
+function closePopup() {
+    const overlay = document.getElementById('tsf-overlay');
+    const panel = document.getElementById('ttotto-sfw-settings');
+    if (overlay) overlay.style.cssText = `display:none !important; ${TSF_OVERLAY_BASE_CSS}`;
+    if (panel) {
+        panel.hidden = true;
+        settingsHomeParent = ensureSettingsHome();
+        panel.classList.remove('tsf-in-popup');
+        const drawerContent = panel.querySelector('.inline-drawer-content');
+        if (drawerContent) drawerContent.style.removeProperty('display');
+        settingsHomeParent.append(panel);
+    }
+    popupOpen = false;
+}
+
+function addWandButton() {
+    if (document.getElementById('tsf-wand-button')) return;
+    const menu = document.getElementById('extensionsMenu');
+    if (!menu) {
+        console.warn(`${LOG_PREFIX} #extensionsMenu를 찾지 못했습니다 — ST 버전에 따라 셀렉터 조정이 필요할 수 있어요.`);
+        return;
+    }
+    const item = document.createElement('div');
+    item.id = 'tsf-wand-button';
+    item.className = 'list-group-item flex-container flexGap5 interactable';
+    item.tabIndex = 0;
+    item.innerHTML = '<span class="extensionsMenuExtensionButton" aria-hidden="true">🫧</span><span>또또SFW</span>';
+    item.addEventListener('click', () => {
+        menu.style.display = 'none';
+        openPopup();
+    });
+    menu.append(item);
+}
+
+function removeWandButton() {
+    document.getElementById('tsf-wand-button')?.remove();
+}
+
+async function loadSettingsHtml() {
+    const response = await fetch(new URL('settings.html', EXTENSION_BASE_URL));
+    if (!response.ok) throw new Error(`settings.html 로드 실패 (HTTP ${response.status})`);
+    return response.text();
+}
+
+// Keep settings outside SillyTavern's extension tab, even with stale CSS.
+function ensureSettingsHome() {
+    let home = document.getElementById('tsf-settings-home');
+    if (!home) {
+        home = document.createElement('div');
+        home.id = 'tsf-settings-home';
+        home.hidden = true;
+        home.style.setProperty('display', 'none', 'important');
+        document.body.append(home);
+    }
+    return home;
+}
+
+async function initializeUi() {
+    syncStateTagDisplayGuard();
+    if (uiReady && document.getElementById('ttotto-sfw-settings')) {
+        addWandButton();
+        updateUi();
+        return;
+    }
+    const container = ensureSettingsHome();
+    settingsHomeParent = container;
+    if (!document.getElementById('ttotto-sfw-settings')) {
+        const html = await loadSettingsHtml();
+        if (!runtimeActive) return;
+        container.insertAdjacentHTML('beforeend', html);
+    }
+    const required = [
+        'tsf-enabled',
+        'tsf-chat-enabled',
+        'tsf-feature-preset',
+        'tsf-repeat-guard',
+        'tsf-dialogue-flow',
+        'tsf-transition-guard',
+        'tsf-repeat-window',
+        'tsf-pace-mode',
+        'tsf-slow-burn-enabled',
+        'tsf-slow-burn-stage',
+        'tsf-refine',
+        'tsf-state-location',
+        'tsf-state-scene-type',
+        'tsf-state-time',
+        'tsf-state-environment',
+        'tsf-state-topic',
+        'tsf-state-question',
+        'tsf-dialogue-window',
+        'tsf-card-link',
+        'tsf-card-link-list',
+    ];
+    const missing = required.filter((id) => !document.getElementById(id));
+    if (missing.length) throw new Error(`설정 패널 요소 누락: ${missing.join(', ')}`);
+    uiReady = true;
+    bindUi();
+    populateProfiles();
+    setTab('state');
+    addWandButton();
+    updateUi();
+}
+
+// ───────────────────────── 이벤트 등록/수명주기 ─────────────────────────
+
+function registerEvents() {
+    syncStateTagDisplayGuard();
+    if (eventsRegistered) return;
+    const context = getContext();
+    const events = getEventTypes(context);
+    const listen = (name, handler) => {
+        const event = events[name];
+        if (!event) return;
+        context.eventSource.on(event, handler);
+        registeredEventHandlers.push({ event, handler });
+    };
+
+    listen('GENERATION_STARTED', onGenerationStarted);
+    listen('MESSAGE_RECEIVED', (index) => {
+        diagnosticRecord('message_received', { message: Number(index) });
+        diagnosticTrackBody(context.chat?.[Number(index)], Number(index), 'message_received');
+        finishReceivedGeneration();
+        schedulePostGenerationHarvest(index);
+    });
+    // 스와이프·렌더 보험: ST 버전이나 번역 확장에 따라 메시지 추가/수정 이벤트 순서가 달라질 수 있다.
+    listen('GENERATION_ENDED', (type) => {
+        diagnosticRecord('generation_ended');
+        if (finishSceneGeneration(type)) schedulePostGenerationHarvest();
+    });
+    listen('GENERATION_STOPPED', () => {
+        rewriteGeneration = null;
+        generationEvents = [];
+        schedulePostGenerationHarvest();
+    });
+    listen('CHARACTER_MESSAGE_RENDERED', (index) => {
+        diagnosticRecord('message_rendered', { message: Number(index) });
+        schedulePostGenerationHarvest(index);
+    });
+    listen('MESSAGE_SWIPED', (index) => {
+        diagnosticRecord('message_swiped', { message: Number(index) });
+        schedulePostGenerationHarvest(index);
+    });
+    listen('MESSAGE_EDITED', (index) => {
+        diagnosticRecord('message_edited', { message: Number(index) });
+        schedulePostGenerationHarvest(index);
+    });
+    listen('MESSAGE_DELETED', () => updateUi());
+    listen('CHAT_CHANGED', () => {
+        diagnosticRecord('chat_changed');
+        diagnosticBodies.clear();
+        rewriteGeneration = null;
+        generationEvents = [];
+        lastCompletedAssistant = null;
+        clearLegacyDiagnostics();
+        clearTimeout(refineTimer);
+        refineTimer = null;
+        queuedRefineTarget = null;
+        lastAutoRefineTarget = null;
+        clearPostGenerationTimers();
+        lastObservedMessageKey = '';
+        refineAbortController?.abort();
+        clearInjectedPrompt();
+        populateProfiles();
+        updateUi();
+    });
+    listen('CHAT_CREATED', () => updateUi());
+    listen('CONNECTION_PROFILE_LOADED', populateProfiles);
+    eventsRegistered = true;
+}
+
+function unregisterEvents() {
+    if (!eventsRegistered) return;
+    const eventSource = getContext().eventSource;
+    for (const { event, handler } of registeredEventHandlers.splice(0)) {
+        if (typeof eventSource.removeListener === 'function') eventSource.removeListener(event, handler);
+        else if (typeof eventSource.off === 'function') eventSource.off(event, handler);
+    }
+    eventsRegistered = false;
+}
+
+async function initialize() {
+    if (!runtimeActive) return;
+    if (initializationPromise) return initializationPromise;
+    initializationPromise = (async () => {
+        clearLegacyDiagnostics();
+        getSettings();
+        syncDiagnosticFetch();
+
+        registerEvents();
+        await initializeUi();
+        schedulePostGenerationHarvest();
+        startMessageObserver();
+        console.log(`${LOG_PREFIX} v${EXTENSION_VERSION} 로드 완료`);
+
+    })();
+    try { await initializationPromise; }
+    finally { initializationPromise = null; }
+}
+
+function requestInitialize() {
+    if (!runtimeActive) return;
+    // APP_READY가 이미 끝난 뒤 설치/활성화되어도 현재 DOM으로 초기화한다.
+    if (!document.body) return;
+    void initialize().catch((error) => {
+        console.error(`${LOG_PREFIX} 초기화 실패`, error);
+        toastr.error(`초기화 실패: ${error?.message ?? error}`, "🫧또또SFW");
+    });
+}
+
+export function onActivate() {
+    runtimeActive = true;
+    getSettings();
+    registerEvents();
+    requestInitialize();
+}
+
+export function onEnable() {
+    runtimeActive = true;
+    clearLegacyDiagnostics();
+    registerEvents();
+    startMessageObserver();
+    if (uiReady) addWandButton();
+    requestInitialize();
+}
+
+export function onDisable() {
+    runtimeActive = false;
+    stopDiagnosticFetch();
+    stopStateTagDisplayGuard();
+    rewriteGeneration = null;
+    generationEvents = [];
+    lastCompletedAssistant = null;
+    clearTimeout(refineTimer);
+    refineTimer = null;
+    queuedRefineTarget = null;
+    lastAutoRefineTarget = null;
+    clearPostGenerationTimers();
+    stopMessageObserver();
+    refineAbortController?.abort();
+    closePopup();
+    removeWandButton();
+    unregisterEvents();
+    const meta = getChatMeta(false);
+    if (meta) {
+        resetSlowBurnSession(meta);
+        saveChatMeta();
+    }
+    clearInjectedPrompt();
+}
+
+export function onClean() {
+    onDisable();
+    stopDiagnosticFetch();
+    clearDiagnostics();
+    stopStateTagDisplayGuard();
+    clearTimeout(refineTimer);
+    refineTimer = null;
+    queuedRefineTarget = null;
+    lastAutoRefineTarget = null;
+    clearPostGenerationTimers();
+    stopMessageObserver();
+    refineAbortController?.abort();
+    closePopup();
+    removeWandButton();
+    document.getElementById('tsf-overlay')?.remove();
+    const context = getContext();
+    delete context.extensionSettings[MODULE_NAME];
+    if (context.chatMetadata && typeof context.chatMetadata === 'object') {
+        delete context.chatMetadata[CHAT_STATE_KEY];
+        saveChatMeta();
+    }
+    context.saveSettingsDebounced();
+    clearInjectedPrompt();
+}
+
+const bootContext = getContext();
+syncStateTagDisplayGuard();
+const bootEvents = getEventTypes(bootContext);
+// 이벤트가 아직 발생하지 않은 초기 로드와 이미 발생한 늦은 로드를 모두 처리한다.
+for (const event of new Set([bootEvents.APP_INITIALIZED, bootEvents.APP_READY].filter(Boolean))) {
+    bootContext.eventSource.on(event, requestInitialize);
+}
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', requestInitialize, { once: true });
+} else {
+    requestInitialize();
+}
