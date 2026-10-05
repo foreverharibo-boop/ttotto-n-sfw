@@ -169,3 +169,42 @@ test('passive SFW collection keeps the exact explicit panel time while NSFW owns
         assert.equal(r.runtime.engines.sfw.summary().state.time.en, 'Friday | 10:15 AM');
     } finally { r.runtime.stop(); }
 });
+
+test('intimate scenes share continuity rules and current facts, respecting each toggle and body validity', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        r.context.chat.push({ mes: 'A quiet exchange.' + tags() }); r.source.emit('MESSAGE_RECEIVED', 0);
+        const settings = r.runtime.settings().engines.sfw;
+        settings.transitionGuard = true; settings.dialogueFlow = true;
+        await r.runtime.intercept([], 1000, null, 'normal');
+        const shared = () => r.prompts[PROMPT_KEY].split('[Shared scene continuity]')[1]?.split('[Unified scene bookkeeping]')[0] || '';
+        assert.equal(r.runtime.owner(), 'nsfw');
+        assert.match(shared(), /SCENE TRANSITION GUARD/);
+        assert.match(shared(), /Time\/context: Morning/);
+        assert.match(shared(), /DIALOGUE CONTINUITY/);
+        assert.match(shared(), /Current conversation topic: Trip/);
+        assert.match(shared(), /question awaiting a response: When\?/);
+        assert.match(shared(), /Newly established facts: Tomorrow/);
+        assert.match(shared(), /USER message already answered or superseded it/);
+        assert.doesNotMatch(shared(), /Scene type:|SUGGESTED NEXT BEATS|USER-TARGET LOCK|STAGE CAP/);
+        settings.dialogueFlow = false;
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.match(shared(), /SCENE TRANSITION GUARD/);
+        assert.doesNotMatch(shared(), /DIALOGUE CONTINUITY|Trip|When\?|Tomorrow/);
+        settings.dialogueFlow = true; settings.transitionGuard = false;
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.match(shared(), /DIALOGUE CONTINUITY/);
+        assert.doesNotMatch(shared(), /SCENE TRANSITION GUARD|Time\/context:|Location:/);
+        settings.transitionGuard = true;
+        r.context.chat[0].mes = 'Edited reply.';
+        r.source.emit('MESSAGE_EDITED', 0);
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.equal(r.runtime.owner(), 'nsfw');
+        assert.match(shared(), /DIALOGUE CONTINUITY/);
+        assert.doesNotMatch(shared(), /Trip|When\?|Tomorrow|Time\/context: Morning/);
+        settings.dialogueFlow = false; settings.transitionGuard = false;
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.equal(shared(), '');
+        assert.match(r.prompts[PROMPT_KEY], /<sfw_scene>/);
+    } finally { r.runtime.stop(); }
+});

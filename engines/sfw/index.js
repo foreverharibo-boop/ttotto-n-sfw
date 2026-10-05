@@ -2339,6 +2339,7 @@ function stateReportLines(settings, nextGuidance = '') {
 // No SFW pacing, bans, state injection, or scene-ending instructions are added.
 function buildHandoffReport() {
     if (unifiedHost) return [
+        ...buildUnifiedContinuityLines(),
         '[Unified scene bookkeeping]',
         'Bookkeeping only: do not end, slow, redirect or change the story for this report.',
         'Keep the separately requested scene_state report. Output each tag type exactly once.',
@@ -4305,6 +4306,31 @@ function onClean() {
     clearInjectedPrompt();
 }
 
+
+function buildUnifiedContinuityLines() {
+    const settings = getSettings();
+    if (!settings.transitionGuard && !settings.dialogueFlow) return [];
+    const message = assistantMessages().at(-1);
+    const snapshot = snapshotForMessage(message);
+    const state = snapshotMatchesMessage(message, snapshot) ? snapshot.state : null;
+    const lines = ['[Shared scene continuity]'];
+    if (settings.transitionGuard) {
+        if (state) {
+            if (hasBi(state.location)) lines.push(`- Location: ${biText(state.location, 'en')}`);
+            if (hasBi(state.time)) lines.push(`- Time/context: ${biText(state.time, 'en')}`);
+            if (hasBi(state.environment)) lines.push(`- Environment: ${biText(state.environment, 'en')}`);
+        }
+        lines.push('SCENE TRANSITION GUARD: Do not change location, jump forward in time, end the current interaction, or cut to another scene without an explicit on-page transition that follows from the USER message or the current action. A transition is allowed when it is narrated clearly; a silent teleport, unexplained time skip, or abrupt topic/scene replacement is not.');
+    }
+    if (settings.dialogueFlow) {
+        if (hasBi(state?.dialogueFlow?.topic)) lines.push(`- Current conversation topic: ${biText(state.dialogueFlow.topic, 'en')}`);
+        if (hasBi(state?.dialogueFlow?.lastQuestion)) lines.push(`- Most recent direct question awaiting a response: ${biText(state.dialogueFlow.lastQuestion, 'en')}`);
+        if (state?.dialogueFlow?.newFacts?.length) lines.push(`- Newly established facts: ${state.dialogueFlow.newFacts.map(fact => biText(fact, 'en')).join('; ')}`);
+        lines.push('DIALOGUE CONTINUITY: Stay with the current conversational topic unless the USER changes or resolves it. Address the most recent direct question naturally when it is still relevant, but treat it as resolved if the USER message already answered or superseded it. Treat newly established facts as grounding for what happens next: build forward from them naturally instead of merely restating them or making characters forget what was just learned.');
+    }
+    lines.push('Apply continuity to the current intimate scene. These rules impose no SFW pace, stage cap, or requirement to end or cool the scene. Explicit USER changes supersede the recorded context; never force an already answered question or resolved topic back into the scene.');
+    return lines;
+}
 
 // END ENGINE
 
