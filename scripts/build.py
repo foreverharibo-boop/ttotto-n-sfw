@@ -85,6 +85,11 @@ function buildUnifiedContinuityLines() {
         source = source.replace('displayGuardActive = Boolean(runtimeActive && getSettings().enabled);',
                                 'displayGuardActive = Boolean(runtimeActive && (unifiedHost ? unifiedHost.anyEnabled() : getSettings().enabled));')
         source = source.replace("'c3d51f0b-6ad4-4aaa-8801-6ba5efec9a13'", "(unifiedHost ? 'ttotto-unified-hidden-reports' : 'c3d51f0b-6ad4-4aaa-8801-6ba5efec9a13')")
+    # The UI may initialize on the home screen; scene work requires an open chat.
+    for name in ('getChatMeta', 'isSupervising', 'observeLatestMessage', 'handleIncomingMessage',
+                 'reconcileReportedRelease', 'maybeStealthRelease', 'syncNsfwSuspension', 'runRefine'):
+        pattern = rf'((?:async )?function {name}\([^\n]*\) \{{)'
+        source = re.sub(pattern, lambda m: m.group(0) + '\n    if (unifiedHost && !unifiedHost.chatReady()) return ' + ('false' if name == 'isSupervising' else 'null') + ';', source, count=1)
     source = source.replace('function updateUi() {', 'function updateUi() {\n    unifiedHost?.uiChanged();')
     api = '''
 function capturePassive(message) {

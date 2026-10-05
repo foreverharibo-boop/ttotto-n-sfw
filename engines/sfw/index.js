@@ -1089,6 +1089,7 @@ function handleDeveloperTitleTap(event) {
 }
 
 function getChatMeta(create = true) {
+    if (unifiedHost && !unifiedHost.chatReady()) return null;
     const context = getContext();
     if (!context.chatMetadata || typeof context.chatMetadata !== 'object') return null;
     let needsSave = false;
@@ -1154,6 +1155,7 @@ function saveChatMeta() {
 
 // 감시 중: 이 채팅에서 확장이 동작할 조건이 다 켜져 있는 상태 (최소한 상태 태그는 수집)
 function isSupervising() {
+    if (unifiedHost && !unifiedHost.chatReady()) return false;
     const settings = getSettings();
     const meta = getChatMeta(false);
     return Boolean(runtimeActive && settings.enabled && meta?.enabled);
@@ -1323,6 +1325,7 @@ function resumeSfwFromLatest() {
 }
 
 function syncNsfwSuspension({ notify = false } = {}) {
+    if (unifiedHost && !unifiedHost.chatReady()) return null;
     const meta = getChatMeta(false);
     if (!meta?.enabled) return false;
 
@@ -2760,6 +2763,7 @@ function latestAssistantTarget() {
 }
 
 async function runRefine({ manual = false } = {}) {
+    if (unifiedHost && !unifiedHost.chatReady()) return null;
     const settings = getSettings();
     if (!runtimeActive || !settings.enabled || !getChatMeta(false)?.enabled || refineRunning) return false;
     if (!manual && !settings.autoRefine) return false;
@@ -2926,6 +2930,7 @@ function schedulePostGenerationHarvest(index) {
 }
 
 function observeLatestMessage() {
+    if (unifiedHost && !unifiedHost.chatReady()) return null;
     if (!runtimeActive) return;
     const target = latestAssistantTarget();
     // A background NSFW repair changes ownership without editing the body.
@@ -2986,6 +2991,7 @@ function persistChat() {
 }
 
 function handleIncomingMessage(index) {
+    if (unifiedHost && !unifiedHost.chatReady()) return null;
     if (!runtimeActive) return;
     const settings = getSettings();
     if (!settings.enabled) { diagnosticRecord('collection_skipped', { reason: 'extension_disabled' }); return; }

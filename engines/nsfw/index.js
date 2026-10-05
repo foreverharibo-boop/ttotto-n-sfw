@@ -946,6 +946,7 @@ function handleDeveloperTitleTap(event) {
 }
 
 function getChatMeta(create = true) {
+    if (unifiedHost && !unifiedHost.chatReady()) return null;
     const context = getContext();
     if (!context.chatMetadata || typeof context.chatMetadata !== 'object') return null;
     let needsSave = false;
@@ -1001,6 +1002,7 @@ function saveChatMeta() {
 
 // 감시 중: 이 채팅에서 확장이 동작할 조건이 다 켜져 있는 상태 (최소한 상태 태그는 수집)
 function isSupervising() {
+    if (unifiedHost && !unifiedHost.chatReady()) return false;
     const settings = getSettings();
     const meta = getChatMeta(false);
     return Boolean(runtimeActive && settings.enabled && settings.adultConfirmed && meta?.enabled);
@@ -1200,6 +1202,7 @@ function recentReportedHeat() {
 // 이미 현재 행동 신호가 사라진 장면은 다음 생성 전에 즉시 해제한다.
 // 과거 신체 묘사만 남은 상태에서 불필요한 마무리 브릿지를 다시 넣지 않는다.
 function maybeStealthRelease() {
+    if (unifiedHost && !unifiedHost.chatReady()) return null;
     const settings = getSettings();
     const meta = getChatMeta(false);
     if (settings.armMode === 'manual' || !meta?.autoArmed || meta.forceArmed || holdsRewriteGeneration() || !stealthColdStreak()) return false;
@@ -2510,6 +2513,7 @@ function awaitRefineResponse(signal) {
 }
 
 async function runRefine({ manual = false } = {}) {
+    if (unifiedHost && !unifiedHost.chatReady()) return null;
     const settings = getSettings();
     if (!runtimeActive || !settings.enabled || !getChatMeta(false)?.enabled) return false;
     if (!manual && (!settings.autoRefine || !autoRefineNeeded())) return false;
@@ -2612,6 +2616,7 @@ function scheduleAutoRefine() {
 let messageObserverTimer = null;
 let lastObservedMessage = null;
 function observeLatestMessage() {
+    if (unifiedHost && !unifiedHost.chatReady()) return null;
     if (!runtimeActive || !isSupervising() || holdsRewriteGeneration()
         || generationEvents.some((type) => ALLOWED_GENERATION_TYPES.has(type))) return;
     const message = assistantMessages().at(-1);
@@ -2669,6 +2674,7 @@ function persistChat() {
 // latest selected, body-matching report can release ownership; never replay an
 // old high report to activate the extension or interrupt an in-flight reply.
 function reconcileReportedRelease() {
+    if (unifiedHost && !unifiedHost.chatReady()) return null;
     const settings = getSettings();
     const meta = getChatMeta(false);
     if (settings.armMode !== 'auto' || !meta?.autoArmed || meta.forceArmed
@@ -2746,6 +2752,7 @@ function applyReportedHeat(state, message) {
 }
 
 function handleIncomingMessage(index) {
+    if (unifiedHost && !unifiedHost.chatReady()) return null;
     if (!runtimeActive) return;
     const settings = getSettings();
     if (!settings.enabled || !settings.adultConfirmed) { diagnosticRecord('collection_skipped', { reason: 'disabled_or_unconfirmed' }); return; }

@@ -1,13 +1,13 @@
 import { createRuntime } from './runtime.js';
 import { createUi } from './ui.js';
 
-let runtime, starting = null, enabled = true, warned = false;
+let runtime, starting = null, enabled = true, warned = false, appReady = false;
 const ui = createUi(() => runtime);
 function hasLegacyRuntime() {
     return Boolean(globalThis.ttottoSfwGenerationInterceptor || globalThis.ttottoNsfwGenerationInterceptor);
 }
 async function start() {
-    if (!enabled || !document.body) return;
+    if (!enabled || !appReady || !document.body) return;
     if (hasLegacyRuntime()) {
         if (!warned) {
             warned = true;
@@ -34,6 +34,6 @@ export function onClean() { enabled = false; runtime?.clean(); ui.dispose(); }
 
 const context = SillyTavern.getContext();
 const events = context.eventTypes ?? context.event_types ?? {};
-for (const event of new Set([events.APP_INITIALIZED, events.APP_READY].filter(Boolean))) context.eventSource.on(event, start);
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
-else void start();
+// APP_READY is replayed by Silly's event source for late installation/enabling.
+// DOMContentLoaded and APP_INITIALIZED precede chat restoration.
+context.eventSource.on(events.APP_READY, () => { appReady = true; return start(); });

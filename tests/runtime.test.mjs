@@ -13,7 +13,7 @@ const tags = (heat = 8) => `<scene_state>${JSON.stringify({ ...nsfw, heat })}</s
 function setup({ chat = [], autoRefine = false } = {}) {
     const source = new EventEmitter(), prompts = {}, toasts = [];
     const eventTypes = Object.fromEntries(['GENERATION_STARTED', 'MESSAGE_RECEIVED', 'GENERATION_ENDED', 'GENERATION_STOPPED', 'CHARACTER_MESSAGE_RENDERED', 'MESSAGE_SWIPED', 'MESSAGE_EDITED', 'MESSAGE_DELETED', 'CHAT_CHANGED', 'CHAT_CREATED', 'CONNECTION_PROFILE_LOADED'].map(name => [name, name]));
-    const context = { chat, chatMetadata: {}, extensionSettings: {
+    const context = { characterId: 0, chatId: 'test-chat', chat, chatMetadata: {}, extensionSettings: {
         'ttotto-sfw': { enabled: true, settingsSchemaVersion: 4, autoRefine, slowBurnEnabled: false, futureField: { keep: 42 } },
         'ttotto-nsfw': { enabled: true, settingsSchemaVersion: 3, adultConfirmed: true, armMode: 'auto', autoRefine, slowBurnEnabled: false },
     }, eventSource: source, eventTypes, setExtensionPrompt(key, value) { prompts[key] = value; },
@@ -206,5 +206,33 @@ test('intimate scenes share continuity rules and current facts, respecting each 
         await r.runtime.intercept([], 1000, null, 'normal');
         assert.equal(shared(), '');
         assert.match(r.prompts[PROMPT_KEY], /<sfw_scene>/);
+    } finally { r.runtime.stop(); }
+});
+
+
+test('home screen does not collect, arm, inject or announce; opening a real chat resumes silently', async () => {
+    const r = setup({ chat: [{ mes: 'Unselected report.' + tags() }] });
+    r.context.characterId = undefined; r.context.chatId = undefined;
+    await r.runtime.start({ withUi: false });
+    try {
+        r.runtime.settings().transitionNotifications = true;
+        r.runtime.poll(); r.source.emit('MESSAGE_RECEIVED', 0);
+        await r.runtime.intercept(r.context.chat, 0, () => {}, 'normal');
+        assert.equal(r.runtime.owner(), 'waiting');
+        assert.equal(r.context.chatMetadata[META_KEY], undefined);
+        assert.equal(r.context.chat[0].extra, undefined);
+        assert.equal(r.prompts[PROMPT_KEY], '');
+        r.context.characterId = 0; r.context.chatId = 'real-chat';
+        r.source.emit('CHAT_CHANGED'); r.runtime.poll();
+        await new Promise(resolve => setTimeout(resolve, 230));
+        assert.equal(r.runtime.owner(), 'nsfw');
+        assert.ok(r.context.chat[0].extra.ttottoUnifiedNsfw);
+        assert.deepEqual(r.toasts, []);
+        r.context.characterId = undefined; r.context.chatId = undefined;
+        r.source.emit('CHAT_CHANGED'); r.runtime.poll();
+        assert.equal(r.runtime.owner(), 'waiting');
+        assert.equal(r.prompts[PROMPT_KEY], '');
+        r.context.groupId = 'group'; r.context.chatId = 'group-chat';
+        assert.equal(r.runtime.chatReady(), true);
     } finally { r.runtime.stop(); }
 });

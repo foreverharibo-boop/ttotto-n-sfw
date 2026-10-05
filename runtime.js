@@ -30,6 +30,13 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
     const shared = {};
     const settings = () => migratedContainer(getContext().extensionSettings, SETTINGS_KEY,
         { sfw: 'ttotto-sfw', nsfw: 'ttotto-nsfw' }, () => getContext().saveSettingsDebounced?.());
+    function chatReady() {
+        const context = getContext();
+        const present = value => value !== undefined && value !== null && value !== '';
+        const selected = present(context.groupId) || present(context.characterId);
+        const id = context.getCurrentChatId?.() ?? context.chatId;
+        return Boolean(active && selected && present(id) && Array.isArray(context.chat));
+    }
     function view(parent, key, oldKeys, cache, save) {
         if (cache.has(parent)) return cache.get(parent);
         const names = Object.fromEntries(kinds.map(kind => [oldKeys[kind], kind]));
@@ -58,7 +65,7 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
     }
     function publishPrompt() {
         const context = getContext();
-        let prompt = active ? kinds.map(kind => promptSlots.get(kind) || '').filter(Boolean).join('\n\n') : '';
+        let prompt = chatReady() ? kinds.map(kind => promptSlots.get(kind) || '').filter(Boolean).join('\n\n') : '';
         if (prompt.includes('<scene_state>') && prompt.includes('<sfw_scene>')) prompt += '\n\n[Unified report coordination]\nBoth report types are requested: output exactly one scene_state block and exactly one sfw_scene block. A one-report instruction applies separately to each tag type. Report bookkeeping must not change the story. Sexual heat/stage and narrative intensity/stage are independent; never substitute one for the other.';
         context.setExtensionPrompt(PROMPT_KEY, prompt, 1, 0, false, 0);
     }
@@ -92,6 +99,7 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
                 };
                 if (name === 'extensionSettings') return view(target.extensionSettings, SETTINGS_KEY,
                     { sfw: 'ttotto-sfw', nsfw: 'ttotto-nsfw' }, settingsViews, () => raw.saveSettingsDebounced?.());
+                if (name === 'chatMetadata' && !chatReady()) return null;
                 if (name === 'chatMetadata' && target.chatMetadata) return view(target.chatMetadata, META_KEY,
                     legacy, metadataViews, () => raw.saveMetadataDebounced?.());
                 return target[name];
@@ -106,7 +114,7 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         (extra.ttottoUnifiedImported ??= {})[kind] = true;
     }
     function capture(message) {
-        if (!active || capturing) return;
+        if (!chatReady() || capturing) return;
         capturing = true;
         try {
             // Save both native schemas before any report stripping. Do not map
@@ -121,7 +129,7 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         if (level === 'info' && transitionText.test(String(args[0]))) { uiChanged(); return; }
         return notify?.[level]?.(...args);
     }]));
-    const host = { shared, context, migrateMessage, capture, toasts, uiChanged, open,
+    const host = { shared, context, chatReady, migrateMessage, capture, toasts, uiChanged, open,
         anyEnabled: () => kinds.some(kind => engines[kind].getSettings().enabled) };
     const engines = { nsfw: createNsfw(host), sfw: createSfw(host) };
     function latestAssistant() {
@@ -129,6 +137,7 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
     }
     function ownerNow() {
         if (!active) return 'off';
+        if (!chatReady()) return 'waiting';
         if (engines.nsfw.summary().armed) return 'nsfw';
         if (engines.sfw.summary().armed) return 'sfw';
         return 'waiting';
@@ -138,13 +147,15 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         if (next === owner) return;
         const previous = owner; owner = next;
         clearTimeout(transitionTimer);
-        if (previous !== null && settings().transitionNotifications) transitionTimer = setTimeout(() => {
-            if (active && owner === next) notify?.info?.({ sfw: '일반 장면 추적 중', nsfw: '친밀 장면 추적 중', waiting: '장면 감지 대기 중', off: '사용 중지' }[next], '또또(N)SFW');
+        if (previous !== null && previous !== 'waiting' && next !== 'waiting' && chatReady() && settings().transitionNotifications) transitionTimer = setTimeout(() => {
+            if (chatReady() && owner === next) notify?.info?.({ sfw: '일반 장면 추적 중', nsfw: '친밀 장면 추적 중', waiting: '장면 감지 대기 중', off: '사용 중지' }[next], '또또(N)SFW');
         }, 200);
     }
     function dispatch(event, ...args) {
         if (!active) return;
         const types = getContext().eventTypes ?? getContext().event_types ?? {};
+        if (event === types.CHAT_CHANGED) { owner = null; clearTimeout(transitionTimer); promptSlots.clear(); publishPrompt(); }
+        if (!chatReady() && event !== types.CHAT_CHANGED && event !== types.CONNECTION_PROFILE_LOADED) return;
         if (event === types.MESSAGE_RECEIVED) {
             // Both generation guards must be released before passive capture.
             for (const kind of kinds) engines[kind].finishReceivedGeneration();
@@ -153,11 +164,14 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         for (const kind of kinds) for (const handler of listeners.get(event)?.get(kind) ?? []) {
             try { handler(...args); } catch (error) { console.error('[또또(N)SFW] 이벤트 처리 실패', kind, error); }
         }
-        if (event === types.CHAT_CHANGED) { owner = null; clearTimeout(transitionTimer); }
         uiChanged();
     }
     function poll() {
         if (!active) return;
+        if (!chatReady()) {
+            owner = null; clearTimeout(transitionTimer); promptSlots.clear(); publishPrompt(); onUi(); return;
+        }
+        for (const kind of kinds) engines[kind].getChatMeta();
         capture(latestAssistant());
         for (const kind of kinds) engines[kind].observeLatestMessage();
         uiChanged();
@@ -194,7 +208,7 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         publishPrompt();
     }
     async function intercept(chat, size, abort, type) {
-        if (!active) return;
+        if (!chatReady()) { promptSlots.clear(); publishPrompt(); return; }
         await shared.ttottoNsfwGenerationInterceptor(chat, size, abort, type);
         await shared.ttottoSfwGenerationInterceptor(chat, size, abort, type);
         updateOwner();
@@ -211,7 +225,7 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         engines.sfw.persistChat();
     }
     return { engines, shared, settings, context, capture, dispatch, poll, start, stop, clean,
-        intercept, owner: ownerNow, get active() { return active; },
-        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.1.4', owner: ownerNow(),
+        intercept, chatReady, owner: ownerNow, get active() { return active; },
+        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.1.5', owner: ownerNow(),
             sfw: JSON.parse(engines.sfw.diagnosticReport()), nsfw: JSON.parse(engines.nsfw.diagnosticReport()) }) };
 }
