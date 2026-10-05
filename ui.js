@@ -16,7 +16,7 @@ export function createUi(getRuntime) {
         if (!menu) return;
         const button = el('div', undefined, 'list-group-item flex-container flexGap5 interactable');
         button.id = 'ttu-wand-button'; button.tabIndex = 0; button.setAttribute('role', 'button');
-        const icon = el('span', undefined, 'extensionsMenuExtensionButton fa-solid fa-layer-group');
+        const icon = el('span', '🦋', 'extensionsMenuExtensionButton');
         icon.setAttribute('aria-hidden', 'true');
         button.append(icon, el('span', '또또(N)SFW'));
         button.addEventListener('keydown', event => {
