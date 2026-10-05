@@ -1622,8 +1622,8 @@ function recentActs(windowSize) {
     const rows = [];
     for (let i = messages.length - 1; i >= 0; i--) {
         const snapshot = snapshotForMessage(messages[i]);
-        if (!snapshot?.state?.acts?.length || !snapshotMatchesMessage(messages[i], snapshot)) continue;
-        const acts = snapshot.state.acts.filter((act) => !isActIgnored(act, ignored));
+        if (!snapshotMatchesMessage(messages[i], snapshot)) continue;
+        const acts = unifiedList(snapshot?.state, 'acts', messages[i]).filter((act) => !isActIgnored(act, ignored));
         if (acts.length) rows.unshift({ turnsAgo: messages.length - i, acts });
     }
     // 중복 제거 (같은 전개가 여러 턴에 반복 기록된 경우 최신 것만)
@@ -1655,8 +1655,8 @@ function recentDialogueBeats(windowSize = Number(getSettings().dialogueWindow) |
     const rows = [];
     for (const message of messages) {
         const snapshot = snapshotForMessage(message);
-        if (!snapshot?.state?.dialogueBeats?.length || !snapshotMatchesMessage(message, snapshot)) continue;
-        const beats = snapshot.state.dialogueBeats.filter((beat) => !isDialogueBeatIgnored(beat, ignored));
+        if (!snapshotMatchesMessage(message, snapshot)) continue;
+        const beats = unifiedList(snapshot?.state, 'dialogueBeats', message).filter((beat) => !isDialogueBeatIgnored(beat, ignored));
         if (beats.length) rows.push({ beats });
     }
     const seen = [];
@@ -1794,7 +1794,8 @@ function buildStateLines(state) {
 function nextBeatCandidates() {
     const ignored = ignoredActSet();
     const { state } = effectiveState();
-    if (!state?.next?.length) return [];
+    const candidates = unifiedList(state, 'next', assistantMessages().at(-1));
+    if (!candidates.length) return [];
     const settings = getSettings();
     const bannedActs = recentActs(Number(settings.repeatWindow) || DEFAULT_SETTINGS.repeatWindow)
         .flatMap((row) => row.acts);
@@ -1803,7 +1804,7 @@ function nextBeatCandidates() {
         ...(getSettings().globalBans ?? []),
     ].map(String).filter(Boolean);
     const accepted = [];
-    for (const beat of state.next) {
+    for (const beat of candidates) {
         if (isActIgnored(beat, ignored)) continue;
         if (customBans.some((ban) => actMatchesPlainBan(beat, ban))) continue;
         if (bannedActs.some((act) => actsAreSimilar(beat, act))) continue;
@@ -2840,14 +2841,18 @@ function renderStatePanel() {
 
     const list = element('tns-char-list');
     list.replaceChildren();
-    const characters = state?.characters ?? {};
+    const scene = unifiedHost.commonState({ display: true });
+    const characters = { ...(scene?.characters ?? {}), ...(state?.characters ?? {}) };
     for (const [name, info] of Object.entries(characters)) {
         const row = document.createElement('div');
         row.className = 'tns-char-row';
         const title = document.createElement('strong');
         title.textContent = name;
         row.append(title);
-        for (const [field, label] of [['clothing', '복장'], ['position', '자세·위치'], ['contact', '접촉']]) {
+        const details = scene?.characters?.[name] ?? {};
+        const fields = [['appearance', '외형·복장'], ['position', '자세·위치'], ['holding', '소지품'], ['condition', '신체 상태'], ['contact', '접촉']];
+        if (hasBi(info.clothing) && hasBi(details.appearance) && biText(info.clothing) !== biText(details.appearance)) fields.splice(1, 0, ['clothing', '복장 상세']);
+        for (const [field, label] of fields) {
             const wrap = document.createElement('label');
             wrap.className = 'tns-char-field';
             const caption = document.createElement('span');
@@ -2855,11 +2860,18 @@ function renderStatePanel() {
             const input = document.createElement('input');
             input.type = 'text';
             input.className = 'text_pole';
-            input.value = biText(info[field]);
+            input.value = biText(field === 'appearance' ? details.appearance || info.clothing : info[field] || details[field]);
             input.addEventListener('change', () => {
                 applyManualEdit((draft) => {
                     if (!draft.characters[name]) draft.characters[name] = { clothing: '', position: '', contact: '' };
-                    draft.characters[name][field] = input.value;
+                    if (['appearance', 'position', 'holding', 'condition'].includes(field)) {
+                        draft.scene ??= structuredClone(unifiedHost.commonState() ?? {});
+                        draft.scene.characters ??= {};
+                        draft.scene.characters[name] ??= {};
+                        draft.scene.characters[name][field] = input.value;
+                    }
+                    if (['clothing', 'position', 'contact'].includes(field)) draft.characters[name][field] = input.value;
+                    if (field === 'appearance') draft.characters[name].clothing = input.value;
                 });
             });
             wrap.append(caption, input);
@@ -3729,6 +3741,15 @@ function onClean() {
 }
 
 
+function unifiedList(state, field, message) {
+    if (!state) return [];
+    const companion = unifiedHost.commonRecord(message);
+    const values = [...(state[field] ?? []), ...(state.scene?.[field] ?? companion?.[field] ?? [])];
+    const unique = [];
+    for (const value of values) if (!unique.some(item => actsAreSimilar(item, value))) unique.push(value);
+    return unique;
+}
+
 function unifiedSceneReportInstruction() {
     return 'In the same scene_state JSON object (or the repair JSON object), include a "scene" object with the full end-of-response scene record. This is required even if no sfw_scene block is requested. Schema: "scene":{"location":"English || 한국어","time":"English || 한국어","environment":"English || 한국어","important_objects":{"object name":"current location/state, English || 한국어"},"characters":{"exact name":{"appearance":"appearance and clothing, English || 한국어","position":"posture/location, English || 한국어","holding":"carried or held items, English || 한국어","condition":"physical condition, English || 한국어"}},"scene_type":"general","intensity":0,"stage":1,"acts":[],"dialogue_beats":[],"dialogue_flow":{"topic":"English || 한국어","last_question":"English || 한국어","new_facts":[]},"next":[]}. Include every present character and relevant object. Unknown facts stay empty; never invent facts. scene.intensity and scene.stage describe narrative progression, independently of the top-level sexual heat and stage. Populate scene.acts, dialogue_beats, dialogue_flow and next from the current reply. If sfw_scene is also requested, its scene facts must agree with this record.';
 }
@@ -3793,6 +3814,7 @@ parseReport: message => {
         const compatible = unifiedHost.isMode('nsfw') || direct?.heat >= AUTO_ARM_ON ? parseCompatibleSfwState(message.mes) : null;
         return compatible ? mergeCurrentReports(direct ?? (snapshotMatchesMessage(message) ? snapshotForMessage(message).state : null), compatible) : direct;
     },
+    recentActs, recentDialogueBeats,
     detect: (state, message) => {
         if (!isSupervising()) return;
         maybeStealthArm();

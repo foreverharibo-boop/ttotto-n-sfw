@@ -3977,10 +3977,10 @@ function buildUnifiedContinuityLines() {
         if (state.intensity !== null && state.intensity !== undefined) lines.push(`- Narrative intensity: ${state.intensity}/10 (not sexual heat)`);
         if (state.stage !== null && state.stage !== undefined) lines.push(`- Narrative stage: ${state.stage}/6 (descriptive only, not a sexual stage or pacing limit)`);
         lines.push('Preserve important objects, appearance, physical condition, held items, posture, location, time and environment until explicit on-page actions or USER instructions change them.');
-        const acts = recentActs(Number(settings.repeatWindow) || DEFAULT_SETTINGS.repeatWindow);
+        const acts = settings.repeatGuard ? unifiedHost.activeActs() : [];
         if (acts.length) lines.push('SHARED RECENT EVENTS — avoid repeating these exact beats; do not avoid the active target scene:', ...acts.map(row => `- ${row.acts.map(act => biText(act, 'en')).join('; ')}`));
         if (settings.dialogueBeatGuard) {
-            const dialogue = recentDialogueBeats();
+            const dialogue = unifiedHost.activeDialogue();
             if (dialogue.length) lines.push('SHARED RECENT DIALOGUE INTENTS — advance the conversation; direct answers and necessary clarifications are allowed:', ...dialogue.map(row => `- ${row.beats.map(beat => biText(beat, 'en')).join('; ')}`));
         }
         if (settings.nextBeatHints && unifiedHost.allowSharedHints()) {

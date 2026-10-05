@@ -3,7 +3,7 @@ const ownerLabels = { sfw: '일반 장면 추적 중', nsfw: '친밀 장면 추�
 export function createUi(getRuntime) {
     let overlay, status, notificationCheckbox, selected = 'sfw', lastFocus;
     const arrangedPanels = new WeakSet();
-    let sharedStatePanel, sharedStateKey;
+    let sharedStatePanel, sharedFlowPanel, sharedStateKey;
     const el = (tag, text, cls) => {
         const node = document.createElement(tag);
         if (text !== undefined) node.textContent = text;
@@ -125,12 +125,17 @@ export function createUi(getRuntime) {
             sharedStatePanel = el('section', undefined, 'ttu-shared-state');
             sharedStatePanel.id = 'ttu-intimate-shared-state';
             sharedStatePanel.setAttribute('aria-label', '장면·인물·대화 기록');
-            anchor.before(sharedStatePanel); sharedStateKey = undefined;
+            anchor.after(sharedStatePanel);
+            sharedFlowPanel = el('section', undefined, 'ttu-shared-state');
+            sharedFlowPanel.id = 'ttu-intimate-dialogue-flow';
+            document.getElementById('tns-next-section').before(sharedFlowPanel);
+            sharedStateKey = undefined;
         }
         const ready = runtime.chatReady();
         const active = ready && runtime.owner() === 'nsfw';
         sharedStatePanel.hidden = !active;
-        if (!active) { sharedStatePanel.replaceChildren(); sharedStateKey = undefined; return; }
+        sharedFlowPanel.hidden = !active;
+        if (!active) { sharedStatePanel.replaceChildren(); sharedFlowPanel.replaceChildren(); sharedStateKey = undefined; return; }
         const snapshot = ready ? runtime.core.commonSummary({ display: true }) : null;
         const state = { location: '', sceneType: '', time: '', environment: '', importantObjects: {}, characters: {},
             intensity: null, stage: null, acts: [], dialogueBeats: [], dialogueFlow: { topic: '', lastQuestion: '', newFacts: [] }, next: [],
@@ -144,8 +149,15 @@ export function createUi(getRuntime) {
                 ? '저장 후 본문이 변경됐어요. 아래는 이 답변에 저장된 기록이며, 검증 전에는 다음 답변에 주입하지 않아요.'
                 : '아직 수집된 장면 정보가 없어요. 다음 응답에서 수집하거나 상태 다시 분석을 사용할 수 있어요.', 'ttu-state-note'));
         }
-        const orderedFields = ['location', 'sceneType', 'time', 'environment', 'importantObjects', 'characters', 'intensity', 'stage', 'acts', 'dialogueBeats', 'dialogueFlow', 'next'];
-        for (const field of [...orderedFields, ...Object.keys(state).filter(key => !orderedFields.includes(key))]) {
+        // Enrich the existing NSFW form instead of stacking a second full record.
+        // Location, character cards, recent events and candidates stay in their
+        // native editable/removable controls, each rendered exactly once.
+        sharedFlowPanel.replaceChildren();
+        const metrics = el('small', [state.intensity != null ? `서사 강도 ${state.intensity}/10` : '',
+            state.stage != null ? `서사 진행 ${state.stage}/6단계` : ''].filter(Boolean).join(' · '), 'ttu-state-note');
+        sharedStatePanel.append(metrics);
+        const orderedFields = ['sceneType', 'time', 'environment', 'importantObjects', 'dialogueFlow'];
+        for (const field of orderedFields) {
             if (!(field in state)) continue;
             const value = state[field];
             if (field === 'dialogueReported') continue; // Parser bookkeeping, not a collected field.
@@ -161,7 +173,7 @@ export function createUi(getRuntime) {
                 if (field === 'importantObjects') group.append(el('small', '현재 장면에서 위치나 상태가 중요한 물건만 추적해요.'));
                 group.append(stateValue(value, !['characters', 'importantObjects'].includes(field)));
             }
-            sharedStatePanel.append(group);
+            (field === 'dialogueFlow' ? sharedFlowPanel : sharedStatePanel).append(group);
         }
     }
     function refreshSceneVisibility(runtime) {

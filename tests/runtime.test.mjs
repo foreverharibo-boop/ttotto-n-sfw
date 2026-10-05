@@ -613,3 +613,22 @@ test('full intimate report makes scene facts available on a same-response SFW re
         assert.ok(r.prompts[PROMPT_KEY].includes('Important object "key": Desk'));
     } finally { r.runtime.stop(); }
 });
+
+test('intimate lists include nested scene events and hints once, retaining exclusions', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        const scene = { ...sfw, acts: [...sfw.acts, 'Open window || 창문 열기'] };
+        r.context.chat.push({ mes: 'Current scene.' + `<scene_state>${JSON.stringify({ ...nsfw, scene })}</scene_state>` });
+        r.source.emit('MESSAGE_RECEIVED', 0);
+        const before = r.runtime.features.nsfw.buildInjection();
+        assert.ok(before.includes('Open window'));
+        assert.ok(before.includes('Plan'));
+        const meta = r.runtime.features.nsfw.getChatMeta();
+        meta.ignoredActs.push('Open window', 'Plan');
+        const after = r.runtime.core.compose();
+        assert.ok(!after.includes('Open window'));
+        assert.ok(!after.includes('Plan'));
+        assert.equal(r.runtime.core.commonSummary().state.characters.A.holding.en, 'Cup');
+        assert.equal(r.runtime.features.nsfw.currentState().state.characters.A.contact.en, 'Hand');
+    } finally { r.runtime.stop(); }
+});

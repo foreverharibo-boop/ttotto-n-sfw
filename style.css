@@ -80,3 +80,13 @@
 #ttu-body .ttu-scene-idle #tsf-panel-state > :not(:first-child):not(.tsf-button-row):not(#tsf-prompt-preview):not(.ttu-idle-note) { display: none !important; }
 #ttu-body .ttu-scene-idle #tns-heat, #ttu-body .ttu-scene-idle #tns-state-source,
 #ttu-body .ttu-scene-idle #tsf-intensity, #ttu-body .ttu-scene-idle #tsf-state-source { display: none !important; }
+
+/* Match the general scene card layout, including narrow mobile inputs. */
+#ttu-overlay #tns-char-list .tns-char-field {
+    grid-template-columns: 72px minmax(0, 1fr);
+    min-width: 0; max-width: 100%;
+}
+#ttu-overlay #tns-char-list .text_pole {
+    box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%;
+    margin-left: 0; margin-right: 0;
+}

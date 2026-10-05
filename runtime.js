@@ -111,8 +111,12 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         holdsRewrite: () => core.holdsRewrite(), canRefine: (...args) => core.canRefine(...args),
         classifying: () => core.classifying(), acceptHeat: (...args) => core.acceptHeat(...args),
         preview: kind => core.owner() === kind ? core.compose() : '',
-        commonState: () => core.commonSummary().state,
+        commonState: options => core.commonSummary(options).state,
         sanitizeCommon: raw => features.sfw.sanitizeState(raw),
+        activeActs: () => features.nsfw.recentActs(features.nsfw.getSettings().repeatWindow),
+        activeDialogue: () => features.nsfw.recentDialogueBeats(),
+        commonRecord: message => features.sfw.snapshotMatchesMessage(message)
+            ? features.sfw.snapshotForMessage(message)?.state : null,
         allowSharedHints: () => features.nsfw.allowSharedHints(),
         filterSharedHints: beats => features.nsfw.filterSharedHints(beats),
         anyEnabled: () => kinds.some(kind => features[kind].getSettings().enabled) };
@@ -191,6 +195,6 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
     }
     return { features, core, settings, context, capture, dispatch, poll, start, stop, clean,
         intercept, chatReady, owner: ownerNow, get active() { return active; },
-        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.2.1', owner: ownerNow(), core: core.diagnostics(),
+        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.2.2', owner: ownerNow(), core: core.diagnostics(),
             sfw: JSON.parse(features.sfw.diagnosticReport()), nsfw: JSON.parse(features.nsfw.diagnosticReport()) }) };
 }

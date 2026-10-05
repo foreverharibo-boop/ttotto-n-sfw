@@ -38,6 +38,11 @@ def adapt(source, kind):
     source = source.replace('if (store) delete message.extra[MESSAGE_EXTRA_KEY];', f"if (store) {{ if (unifiedHost) unifiedHost.clearRecords(message, '{kind}'); else delete message.extra[MESSAGE_EXTRA_KEY]; }}")
     # Saved suspension markers from older versions are not ownership authority.
     if kind == 'sfw':
+        start = source.index('function buildUnifiedContinuityLines()')
+        source = source[:start] + source[start:].replace(
+            'const acts = recentActs(Number(settings.repeatWindow) || DEFAULT_SETTINGS.repeatWindow);',
+            'const acts = settings.repeatGuard ? unifiedHost.activeActs() : [];', 1).replace(
+            'const dialogue = recentDialogueBeats();', 'const dialogue = unifiedHost.activeDialogue();', 1)
         source = source.replace('suspended: Boolean(meta.nsfwSuspended), resumePending: Boolean(meta.nsfwResumePending)', "suspended: unifiedHost ? !unifiedHost.isMode('sfw') : Boolean(meta.nsfwSuspended), resumePending: unifiedHost ? false : Boolean(meta.nsfwResumePending)")
         source = source.replace('const state = snapshotMatchesMessage(message, snapshot) ? snapshot.state : null;', 'const state = unifiedHost.commonState();')
         controller('syncNsfwSuspension', "return !unifiedHost.isMode('sfw');")
@@ -49,6 +54,44 @@ def adapt(source, kind):
         source = source.replace('const resuming = Boolean(meta?.nsfwResumePending);', 'const resuming = !unifiedHost && Boolean(meta?.nsfwResumePending);')
         source = source.replace('NSFW 장면을 다른 확장에 인계한 동안에는 SFW 보정을 쉬어요.', '현재 친밀 장면 모드에서는 일반 장면 보정을 쉬어요.')
     else:
+        # One set of SFW-shaped character cards, with NSFW contact in the same card.
+        source = source.replace('    const characters = state?.characters ?? {};',
+            '    const scene = unifiedHost.commonState({ display: true });\n'
+            '    const characters = { ...(scene?.characters ?? {}), ...(state?.characters ?? {}) };', 1)
+        source = source.replace("        for (const [field, label] of [['clothing', '복장'], ['position', '자세·위치'], ['contact', '접촉']]) {",
+            "        const details = scene?.characters?.[name] ?? {};\n"
+            "        const fields = [['appearance', '외형·복장'], ['position', '자세·위치'], ['holding', '소지품'], ['condition', '신체 상태'], ['contact', '접촉']];\n"
+            "        if (hasBi(info.clothing) && hasBi(details.appearance) && biText(info.clothing) !== biText(details.appearance)) fields.splice(1, 0, ['clothing', '복장 상세']);\n"
+            "        for (const [field, label] of fields) {", 1)
+        source = source.replace('            input.value = biText(info[field]);',
+            "            input.value = biText(field === 'appearance' ? details.appearance || info.clothing : info[field] || details[field]);", 1)
+        source = source.replace('                    draft.characters[name][field] = input.value;',
+            "                    if (['appearance', 'position', 'holding', 'condition'].includes(field)) {\n"
+            "                        draft.scene ??= structuredClone(unifiedHost.commonState() ?? {});\n"
+            "                        draft.scene.characters ??= {};\n"
+            "                        draft.scene.characters[name] ??= {};\n"
+            "                        draft.scene.characters[name][field] = input.value;\n"
+            "                    }\n"
+            "                    if (['clothing', 'position', 'contact'].includes(field)) draft.characters[name][field] = input.value;\n"
+            "                    if (field === 'appearance') draft.characters[name].clothing = input.value;", 1)
+        # Display and inject the same merged lists, retaining removal/filtering.
+        source = source.replace('if (!snapshot?.state?.acts?.length || !snapshotMatchesMessage(messages[i], snapshot)) continue;\n        const acts = snapshot.state.acts.filter',
+            "if (!snapshotMatchesMessage(messages[i], snapshot)) continue;\n        const acts = unifiedList(snapshot?.state, 'acts', messages[i]).filter", 1)
+        source = source.replace('if (!snapshot?.state?.dialogueBeats?.length || !snapshotMatchesMessage(message, snapshot)) continue;\n        const beats = snapshot.state.dialogueBeats.filter',
+            "if (!snapshotMatchesMessage(message, snapshot)) continue;\n        const beats = unifiedList(snapshot?.state, 'dialogueBeats', message).filter", 1)
+        source = source.replace('    if (!state?.next?.length) return [];',
+            "    const candidates = unifiedList(state, 'next', assistantMessages().at(-1));\n    if (!candidates.length) return [];", 1)
+        source = source.replace('    for (const beat of state.next) {', '    for (const beat of candidates) {', 1)
+        source += '''
+function unifiedList(state, field, message) {
+    if (!state) return [];
+    const companion = unifiedHost.commonRecord(message);
+    const values = [...(state[field] ?? []), ...(state.scene?.[field] ?? companion?.[field] ?? [])];
+    const unique = [];
+    for (const value of values) if (!unique.some(item => actsAreSimilar(item, value))) unique.push(value);
+    return unique;
+}
+'''
         # Preserve all scene facts in the intimate report, including repairs.
         source = source.replace('    const hasCharacters = Object.values(clean.characters)',
             "    if (unifiedHost && raw.scene) clean.scene = unifiedHost.sanitizeCommon(raw.scene);\n    const hasCharacters = Object.values(clean.characters)", 1)
@@ -140,6 +183,7 @@ function leaveMode() {
         return compatible ? mergeCurrentReports(direct ?? (snapshotMatchesMessage(message) ? snapshotForMessage(message).state : null), compatible) : direct;
     },'''
     specific = '''commonPrompt: buildHandoffReport, continuityPrompt: () => buildUnifiedContinuityLines().join('\\n'), sanitizeState,''' if kind == 'sfw' else '''
+    recentActs, recentDialogueBeats,
     detect: (state, message) => {
         if (!isSupervising()) return;
         maybeStealthArm();
