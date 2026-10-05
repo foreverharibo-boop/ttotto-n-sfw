@@ -37,7 +37,7 @@ test('unified core traces one write into both diagnostics and distinguishes save
         assert.equal(typeof descriptor.set, 'function');
         for (const kind of ['sfw', 'nsfw']) {
             const diag = r.runtime.diagnostics()[kind];
-            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.5');
+            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.6');
             const writes = diag.events.filter(e => e.stage === 'body_write');
             assert.equal(writes.length, 1); assert.equal(writes[0].data.ownWrite, true);
             assert.equal(writes[0].data.sameSceneBody, true);
@@ -56,8 +56,8 @@ test('unified core traces one write into both diagnostics and distinguishes save
             assert.equal(write.removedChars, 40); assert.equal(write.addedChars, 0);
             assert.equal(write.removedLetters, 40); assert.equal(write.beforeChars, 1414); assert.equal(write.afterChars, 1374);
             assert.equal(write.cached, false); assert.equal(write.savedStage, kind === 'nsfw' ? 5 : 2);
-            assert.equal(diag.current.currentStagePresent, false); assert.equal(diag.current.stageSource, 'default');
-            assert.equal(diag.current.displayedStage, 1);
+            assert.equal(diag.current.currentStagePresent, false); assert.equal(diag.current.stageSource, 'unknown');
+            assert.equal(diag.current.displayedStage, null);
             assert.ok(diag.events.some(e => e.stage === 'cache_invalidated' && e.data.savedStagePresent));
         }
         assert.equal(r.runtime.owner(), 'nsfw'); assert.equal(r.runtime.settings().engines.nsfw.autoRefine, false);
@@ -411,6 +411,53 @@ test('both active modes retain style, pacing, bans, hints, CardInject and slow-b
             assert.equal(r.runtime.owner(), kind);
         } finally { r.runtime.stop(); }
     }
+});
+
+for (const kind of ['sfw', 'nsfw']) test(`${kind}: invalidated stage never becomes a stage-one prompt; fresh reports and manual choices recover`, async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        const config = r.runtime.settings().engines[kind];
+        config.slowBurnEnabled = true;
+        const stageFive = tags(kind === 'nsfw' ? 8 : 1).replace('"stage":4', '"stage":5').replace('"stage":2', '"stage":5');
+        r.context.chat.push({ mes: 'Current scene. ' + 'X'.repeat(40) + stageFive });
+        r.source.emit('MESSAGE_RECEIVED', 0);
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.match(r.prompts[PROMPT_KEY], /CURRENT STAGE 5\/6/);
+        // Mirrors the logged post-collection 40-character removal, with no
+        // assumption about whether a user or another script made the change.
+        r.context.chat[0].mes = r.context.chat[0].mes.slice(0, -40);
+        r.source.emit('CHARACTER_MESSAGE_RENDERED', 0);
+        await r.runtime.intercept([], 1000, null, 'normal');
+        const unknown = r.prompts[PROMPT_KEY];
+        assert.match(unknown, /CURRENT STAGE UNCONFIRMED/);
+        assert.doesNotMatch(unknown, /CURRENT STAGE \d\/6|MAXIMUM CHARACTER-INITIATED STAGE|current cap \d/);
+        assert.equal(r.runtime.features[kind].currentState().state, null);
+        assert.equal(r.context.chat[0].extra.ttottoUnifiedScene.modes[kind].swipes['0'].state.stage, 5);
+        assert.equal(r.runtime.diagnostics()[kind].current.stageSource, 'unknown');
+        // Existing explicit user controls still work even without a report.
+        const meta = r.runtime.features[kind].getChatMeta();
+        meta.slowBurnStageOverride = 4; meta.slowBurnLocked = true;
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.match(r.prompts[PROMPT_KEY], /CURRENT STAGE 4\/6/);
+        assert.match(r.prompts[PROMPT_KEY], /STAGE LOCKED BY USER/);
+        meta.slowBurnStageOverride = null; meta.slowBurnLocked = false;
+        config.developerMode = true;
+        Object.assign(meta, { slowBurnTarget: 'Discuss the plan', slowBurnTargetTurns: 3, slowBurnTargetActive: true });
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.match(r.prompts[PROMPT_KEY], /USER-TARGET SLOW-BURN LOCK/);
+        assert.doesNotMatch(r.prompts[PROMPT_KEY], /CURRENT STAGE UNCONFIRMED/);
+        meta.slowBurnTargetActive = false;
+        r.context.chat.push({ mes: 'Verified continuation.' + stageFive }); r.source.emit('MESSAGE_RECEIVED', 1);
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.match(r.prompts[PROMPT_KEY], /CURRENT STAGE 5\/6/);
+        assert.doesNotMatch(r.prompts[PROMPT_KEY], /CURRENT STAGE UNCONFIRMED/);
+        assert.equal(r.runtime.diagnostics()[kind].current.stageSource, 'reported');
+        // Genuine reported stage 1 remains valid; the fix must not force 5.
+        r.context.chat.push({ mes: 'A new beginning.' + stageFive.replaceAll('"stage":5', '"stage":1') });
+        r.source.emit('MESSAGE_RECEIVED', 2);
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.match(r.prompts[PROMPT_KEY], /CURRENT STAGE 1\/6/);
+    } finally { r.runtime.stop(); }
 });
 
 test('disabling intimate mode releases SFW and disabling both clears directives', async () => {

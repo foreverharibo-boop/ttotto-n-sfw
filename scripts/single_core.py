@@ -8,10 +8,44 @@ import re
 
 
 def adapt(source, kind):
+    # Missing/unverified reports are not evidence of a stage-one scene. Keep
+    # that uncertainty through the UI and prompt instead of feeding 1 back.
+    source = source.replace("return { stage: 1, source: 'default' };",
+        "return { stage: null, source: 'unknown' };")
+    source = source.replace('if (!snapshot?.state) break;',
+        'if (!snapshot?.state || !snapshotMatchesMessage(messages[i], snapshot)) break;')
+    source = source.replace('const canAdvance = !locked && stage < 6',
+        'const canAdvance = stage !== null && !locked && stage < 6')
+    prompt_start = source.index('function buildSlowBurnLines(settings) {')
+    source = source[:prompt_start] + source[prompt_start:].replace(
+        '    const progress = slowBurnProgress(settings);',
+        '''    const progress = slowBurnProgress(settings);
+    if (progress.stage === null) return [
+        '[SLOW-BURN — CURRENT STAGE UNCONFIRMED]',
+        'No verified current stage is available. A missing or invalidated report is NOT a reset to stage 1 and supplies no numeric stage cap.',
+        'Use the latest visible conversation to identify the ongoing scene. Preserve its established progress; do not restart earlier setup because the report is unavailable.',
+        'Continue the present beat at a measured pace without skipping stages, replaying completed setup, jumping in time, or forcing a conclusion while stage residence is unverified.',
+        `SESSION COUNT: ${progress.sessionTurns}/${progress.requiredTurns} responses since activation. Stage residence is unconfirmed.`,
+        'Return the stage actually reached at the END of this response in the hidden report (integer 1-6), using the scale for this mode. Do not copy a fallback stage.',
+    ];''', 1)
+    prefix = 'tsf' if kind == 'sfw' else 'tns'
+    stage_label = "`${sceneTypeDef(sceneType).ko} · ${progress.stage}단계 · ${stage.ko}`" if kind == 'sfw' else "`${progress.stage}단계 · ${stage.ko}`"
+    source = source.replace(f"element('{prefix}-slow-burn-stage').textContent = {stage_label};",
+        f"element('{prefix}-slow-burn-stage').textContent = progress.stage === null ? '단계 확인 대기' : {stage_label};")
+    source = source.replace("default: '초기 단계',", "unknown: '유효한 단계 보고 대기',")
+    source = source.replace('const stageText = `현재 단계', "const stageText = progress.stage === null ? '단계 확인 대기' : `현재 단계")
+    source = source.replace(f"    element('{prefix}-slow-burn-prev').disabled =",
+        f"    element('{prefix}-slow-burn-lock').disabled = progress.stage === null && !progress.locked;\n"
+        f"    element('{prefix}-slow-burn-next').textContent = progress.stage === null ? '1단계 직접 선택' : '다음 ▶';\n"
+        f"    element('{prefix}-slow-burn-prev').disabled =")
+    source = source.replace('const current = slowBurnStageInfo().stage;',
+        'const current = slowBurnStageInfo().stage ?? 0;')
+    source = source.replace('            meta.slowBurnStageOverride = slowBurnStageInfo().stage;',
+        '            const stage = slowBurnStageInfo().stage;\n            if (stage === null) return;\n            meta.slowBurnStageOverride = stage;')
     # Unified diagnostics are labelled as the installed extension, not the
     # upstream feature versions. Body writes are observed once by core.js.
     source = source.replace('extension: MODULE_NAME, version: EXTENSION_VERSION, recording:',
-        f"extension: 'ttotto-unified', mode: '{kind}', version: '0.2.5', recording:")
+        f"extension: 'ttotto-unified', mode: '{kind}', version: '0.2.6', recording:")
     source = source.replace('current: diagnosticState(), events: diagnosticRows',
         'bodyWriteNote: DIAGNOSTIC_NOTE, current: diagnosticState(), events: diagnosticRows')
     source = source.replace('function clearDiagnostics() {',
@@ -19,7 +53,7 @@ def adapt(source, kind):
     source = source.replace('function syncDiagnosticFetch() {',
         'function syncDiagnosticFetch() {\n    unifiedHost.syncBodyDiagnostics();')
     source = source.replace("        else if (key === 'reason'", "        else if (key === 'writeTrace') values[key] = sanitizeWriteTrace(value);\n"
-        "        else if (key === 'stageSource' && ['manual', 'reported', 'heat', 'intensity', 'default'].includes(value)) values[key] = value;\n"
+        "        else if (key === 'stageSource' && ['manual', 'reported', 'heat', 'intensity', 'unknown'].includes(value)) values[key] = value;\n"
         "        else if (key === 'reason'", 1)
     source = source.replace('parsed: Boolean(state),', 'parsed: Boolean(state), ...diagnosticStage(state),')
     source = source.replace('saved: Boolean(snapshot?.state),', "...diagnosticStage(snapshot?.state, 'saved'), saved: Boolean(snapshot?.state),", 1)

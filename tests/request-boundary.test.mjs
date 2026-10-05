@@ -126,8 +126,12 @@ for (const [provider, model, auth] of providers) test(`outgoing JSON: ${provider
             assert.equal(runtime.owner(), 'nsfw'); assert.ok(!prompt.includes('OBJECT_PROBE'), 'old facts blocked on rewrite');
             events.emit('GENERATION_ENDED', type); receive(8);
         }
+        runtime.settings().engines.nsfw.slowBurnEnabled = true;
         context.chat.at(-1).mes = 'Edited after collection.'; events.emit('MESSAGE_EDITED', context.chat.length - 1);
         prompt = await send(); assert.ok(!prompt.includes('OBJECT_PROBE')); assert.equal(runtime.owner(), 'nsfw');
+        assert.match(prompt, /CURRENT STAGE UNCONFIRMED/);
+        assert.doesNotMatch(prompt, /CURRENT STAGE \d\/6|MAXIMUM CHARACTER-INITIATED STAGE|current cap \d/);
+        runtime.settings().engines.nsfw.slowBurnEnabled = false;
         receive(1); prompt = await send(); assert.equal(runtime.owner(), 'sfw');
         for (const fact of commonFacts) assert.ok(prompt.includes(fact), `return: ${fact}`);
         assert.ok(!prompt.includes('CONTACT_PROBE'));
