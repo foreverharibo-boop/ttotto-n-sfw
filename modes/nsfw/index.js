@@ -495,7 +495,7 @@ function diagnosticRecord(stage, data = {}, chat = diagnosticScope()) {
     for (const [key, value] of Object.entries(data)) {
         if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) values[key] = value;
         else if (key === 'writeTrace') values[key] = sanitizeWriteTrace(value);
-        else if (key === 'stageSource' && ['manual', 'reported', 'heat', 'intensity', 'unknown'].includes(value)) values[key] = value;
+        else if (key === 'stageSource' && ['manual', 'reported', 'heat', 'intensity', 'unknown', 'conflict'].includes(value)) values[key] = value;
         else if (key === 'reason' && /^[a-z_-]{1,48}$/.test(value)) values[key] = value;
         else if (key === 'missing' && Array.isArray(value)) values[key] = value.filter(v => ['state', 'location', 'characters', 'acts', 'heat', 'stage', 'next'].includes(v));
     }
@@ -538,7 +538,7 @@ function diagnosticState() {
         refineRunning, pendingGenerations: generationEvents.length };
 }
 function diagnosticReport() {
-    return JSON.stringify({ extension: 'ttotto-unified', mode: 'nsfw', version: '0.2.6', recording: diagnosticsEnabled(),
+    return JSON.stringify({ extension: 'ttotto-unified', mode: 'nsfw', version: '0.2.7', recording: diagnosticsEnabled(),
         note: 'Memory-only; no API keys or dialogue contents. request_observed means the fetch boundary, not proof of model receipt. server_response_observed describes a bounded response copy at the fetch boundary, not guaranteed provider-original output if another wrapper precedes this one. Response/message links require matching bodies; unmatched or ambiguous results are unconfirmed. No raw bodies are exported.',
         bodyWriteNote: DIAGNOSTIC_NOTE, current: diagnosticState(), events: diagnosticRows }, null, 2);
 }
@@ -1845,6 +1845,13 @@ function stageFromState(state) {
     return 1;
 }
 
+function stageHeatConflict(state) {
+    if (state?.stage == null || state?.heat == null) return false;
+    const stage = Number(state.stage), heat = Number(state.heat);
+    return Number.isFinite(stage) && Number.isFinite(heat)
+        && stage >= 1 && stage <= 2 && heat >= 7;
+}
+
 function slowBurnStageInfo() {
     const meta = getChatMeta(false);
     const override = Number(meta?.slowBurnStageOverride);
@@ -1853,7 +1860,8 @@ function slowBurnStageInfo() {
     }
     const { state } = effectiveState();
     if (state?.stage !== null && state?.stage !== undefined && Number.isFinite(Number(state.stage))) {
-        return { stage: stageFromState(state), source: 'reported' };
+        return stageHeatConflict(state) ? { stage: null, source: 'conflict' }
+            : { stage: stageFromState(state), source: 'reported' };
     }
     if (state?.heat !== null && state?.heat !== undefined && Number.isFinite(Number(state.heat))) {
         return { stage: stageFromState(state), source: 'heat' };
@@ -1924,7 +1932,7 @@ function consecutiveSlowBurnTurns(stage, startCount = slowBurnSessionStartCount(
     for (let i = messages.length - 1; i >= 0; i--) {
         const snapshot = snapshotForMessage(messages[i]);
         if (!snapshot?.state || !snapshotMatchesMessage(messages[i], snapshot)) break;
-        if (stageFromState(snapshot.state) !== stage) break;
+        if (stageHeatConflict(snapshot.state) || stageFromState(snapshot.state) !== stage) break;
         turns++;
     }
     return turns;
@@ -2000,6 +2008,10 @@ function buildSlowBurnLines(settings) {
     const progress = slowBurnProgress(settings);
     if (progress.stage === null) return [
         '[SLOW-BURN — CURRENT STAGE UNCONFIRMED]',
+        ...(progress.source === 'conflict' ? [
+            'The recorded sexual heat (7-10: sustained explicit activity) conflicts with the recorded stage (1-2: atmosphere/approach). Reassess BOTH heat and stage from the latest visible scene; do not treat either conflicting number as authoritative.',
+            'Preserve the ongoing physical facts and progress. Do not restart setup, regress to stage 1, or promote to a guessed stage merely to reconcile the report.',
+        ] : []),
         'No verified current stage is available. A missing or invalidated report is NOT a reset to stage 1 and supplies no numeric stage cap.',
         'Use the latest visible conversation to identify the ongoing scene. Preserve its established progress; do not restart earlier setup because the report is unavailable.',
         'Continue the present beat at a measured pace without skipping stages, replaying completed setup, jumping in time, or forcing a conclusion while stage residence is unverified.',
@@ -2072,6 +2084,10 @@ function stateReportLines(slowBurnEnabled, dialogueGuard, nextGuidance = '') {
     lines.push(
         'This is a FULL STATE REPORT, not the temperature-only monitor. Always report location, every present character\'s clothing/position/contact, new acts, actual heat, and next beats. A heat-only object is incomplete.',
         'The example heat value 0 is a format placeholder. Calculate heat from the actual END of the response; do not copy the example value. If prior recorded fields are missing, reconstruct them from the latest roleplay prose without inventing facts.',
+    );
+    if (slowBurnEnabled) lines.push(
+        'Sexual stage scale: 1 tension/atmosphere; 2 gaze/words/proximity; 3 initial light contact; 4 deepening contact/reactions; 5 explicit escalation; 6 peak or conclusion permitted. Judge the END of this response, independently of the nested narrative scene.stage.',
+        'The example stage value 1 is a FORMAT PLACEHOLDER, not a default or instruction to restart. Sustained explicit activity (heat 7-10) is incompatible with atmosphere/approach only (stage 1-2). Recheck both values against the actual scene if they disagree; never fix a conflict by blindly converting heat into a stage.',
     );
     if (nextGuidance) lines.push(nextGuidance);
     if (!dialogueGuard) return lines;
@@ -2747,11 +2763,12 @@ function renderSlowBurnPanel(settings) {
     const sourceLabel = {
         manual: '수동 선택',
         reported: 'AI 단계 감지',
+        conflict: '온도·단계 불일치, 재확인 대기',
         heat: '온도에서 감지',
         unknown: '유효한 단계 보고 대기',
     }[progress.source] ?? '자동 감지';
 
-    element('tns-slow-burn-stage').textContent = progress.stage === null ? '단계 확인 대기' : `${progress.stage}단계 · ${stage.ko}`;
+    element('tns-slow-burn-stage').textContent = progress.stage === null ? (progress.source === 'conflict' ? '단계 재확인 대기' : '단계 확인 대기') : `${progress.stage}단계 · ${stage.ko}`;
     const sessionText = `활성화 후 ${Math.min(progress.sessionTurns, progress.requiredTurns)}/${progress.requiredTurns}턴`;
     const stageText = progress.stage === null ? '단계 확인 대기' : `현재 단계 ${Math.min(progress.turns, progress.requiredTurns)}/${progress.requiredTurns}턴`;
     element('tns-slow-burn-progress').textContent = progress.locked
