@@ -14,6 +14,22 @@ def adapt(source, kind):
         "return { stage: null, source: 'unknown' };")
     source = source.replace('if (!snapshot?.state) break;',
         'if (!snapshot?.state || !snapshotMatchesMessage(messages[i], snapshot)) break;')
+    if kind == 'nsfw':
+        # Only reject a clear contradiction with this mode's activity scale.
+        # Keep the recorded facts/heat and manual choices; never infer stage 5.
+        source = source.replace('function slowBurnStageInfo() {', '''function stageHeatConflict(state) {
+    if (state?.stage == null || state?.heat == null) return false;
+    const stage = Number(state.stage), heat = Number(state.heat);
+    return Number.isFinite(stage) && Number.isFinite(heat)
+        && stage >= 1 && stage <= 2 && heat >= 7;
+}
+
+function slowBurnStageInfo() {''', 1)
+        source = source.replace("return { stage: stageFromState(state), source: 'reported' };",
+            "return stageHeatConflict(state) ? { stage: null, source: 'conflict' }\n"
+            "            : { stage: stageFromState(state), source: 'reported' };", 1)
+        source = source.replace('        if (stageFromState(snapshot.state) !== stage) break;',
+            '        if (stageHeatConflict(snapshot.state) || stageFromState(snapshot.state) !== stage) break;', 1)
     source = source.replace('const canAdvance = !locked && stage < 6',
         'const canAdvance = stage !== null && !locked && stage < 6')
     prompt_start = source.index('function buildSlowBurnLines(settings) {')
@@ -28,10 +44,25 @@ def adapt(source, kind):
         `SESSION COUNT: ${progress.sessionTurns}/${progress.requiredTurns} responses since activation. Stage residence is unconfirmed.`,
         'Return the stage actually reached at the END of this response in the hidden report (integer 1-6), using the scale for this mode. Do not copy a fallback stage.',
     ];''', 1)
+    if kind == 'nsfw':
+        source = source.replace("        '[SLOW-BURN — CURRENT STAGE UNCONFIRMED]',",
+            "        '[SLOW-BURN — CURRENT STAGE UNCONFIRMED]',\n"
+            "        ...(progress.source === 'conflict' ? [\n"
+            "            'The recorded sexual heat (7-10: sustained explicit activity) conflicts with the recorded stage (1-2: atmosphere/approach). Reassess BOTH heat and stage from the latest visible scene; do not treat either conflicting number as authoritative.',\n"
+            "            'Preserve the ongoing physical facts and progress. Do not restart setup, regress to stage 1, or promote to a guessed stage merely to reconcile the report.',\n"
+            "        ] : []),", 1)
+        source = source.replace('    if (nextGuidance) lines.push(nextGuidance);', '''    if (slowBurnEnabled) lines.push(
+        'Sexual stage scale: 1 tension/atmosphere; 2 gaze/words/proximity; 3 initial light contact; 4 deepening contact/reactions; 5 explicit escalation; 6 peak or conclusion permitted. Judge the END of this response, independently of the nested narrative scene.stage.',
+        'The example stage value 1 is a FORMAT PLACEHOLDER, not a default or instruction to restart. Sustained explicit activity (heat 7-10) is incompatible with atmosphere/approach only (stage 1-2). Recheck both values against the actual scene if they disagree; never fix a conflict by blindly converting heat into a stage.',
+    );
+    if (nextGuidance) lines.push(nextGuidance);''', 1)
     prefix = 'tsf' if kind == 'sfw' else 'tns'
     stage_label = "`${sceneTypeDef(sceneType).ko} · ${progress.stage}단계 · ${stage.ko}`" if kind == 'sfw' else "`${progress.stage}단계 · ${stage.ko}`"
     source = source.replace(f"element('{prefix}-slow-burn-stage').textContent = {stage_label};",
         f"element('{prefix}-slow-burn-stage').textContent = progress.stage === null ? '단계 확인 대기' : {stage_label};")
+    if kind == 'nsfw':
+        source = source.replace("progress.stage === null ? '단계 확인 대기' :", "progress.stage === null ? (progress.source === 'conflict' ? '단계 재확인 대기' : '단계 확인 대기') :")
+        source = source.replace("        reported: 'AI 단계 감지',", "        reported: 'AI 단계 감지',\n        conflict: '온도·단계 불일치, 재확인 대기',", 1)
     source = source.replace("default: '초기 단계',", "unknown: '유효한 단계 보고 대기',")
     source = source.replace('const stageText = `현재 단계', "const stageText = progress.stage === null ? '단계 확인 대기' : `현재 단계")
     source = source.replace(f"    element('{prefix}-slow-burn-prev').disabled =",
@@ -45,7 +76,7 @@ def adapt(source, kind):
     # Unified diagnostics are labelled as the installed extension, not the
     # upstream feature versions. Body writes are observed once by core.js.
     source = source.replace('extension: MODULE_NAME, version: EXTENSION_VERSION, recording:',
-        f"extension: 'ttotto-unified', mode: '{kind}', version: '0.2.6', recording:")
+        f"extension: 'ttotto-unified', mode: '{kind}', version: '0.2.7', recording:")
     source = source.replace('current: diagnosticState(), events: diagnosticRows',
         'bodyWriteNote: DIAGNOSTIC_NOTE, current: diagnosticState(), events: diagnosticRows')
     source = source.replace('function clearDiagnostics() {',
@@ -53,7 +84,7 @@ def adapt(source, kind):
     source = source.replace('function syncDiagnosticFetch() {',
         'function syncDiagnosticFetch() {\n    unifiedHost.syncBodyDiagnostics();')
     source = source.replace("        else if (key === 'reason'", "        else if (key === 'writeTrace') values[key] = sanitizeWriteTrace(value);\n"
-        "        else if (key === 'stageSource' && ['manual', 'reported', 'heat', 'intensity', 'unknown'].includes(value)) values[key] = value;\n"
+        "        else if (key === 'stageSource' && ['manual', 'reported', 'heat', 'intensity', 'unknown', 'conflict'].includes(value)) values[key] = value;\n"
         "        else if (key === 'reason'", 1)
     source = source.replace('parsed: Boolean(state),', 'parsed: Boolean(state), ...diagnosticStage(state),')
     source = source.replace('saved: Boolean(snapshot?.state),', "...diagnosticStage(snapshot?.state, 'saved'), saved: Boolean(snapshot?.state),", 1)

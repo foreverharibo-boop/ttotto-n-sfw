@@ -32,4 +32,12 @@ for (const kind of ['sfw', 'nsfw']) test(`${kind}: unknown slow-burn stage rende
     assert.match(element(`${prefix}-slow-burn-stage`).textContent, /5단계/);
     assert.equal(element(`${prefix}-slow-burn-lock`).disabled, false);
     assert.equal(element(`${prefix}-slow-burn-next`).textContent, '다음 ▶');
+    if (kind === 'nsfw') {
+        progress.stage = null; progress.source = 'conflict';
+        sandbox.render({ slowBurnEnabled: true });
+        assert.equal(element(`${prefix}-slow-burn-stage`).textContent, '단계 재확인 대기');
+        assert.equal(element(`${prefix}-slow-burn-source`).textContent, '온도·단계 불일치, 재확인 대기');
+        assert.equal(element(`${prefix}-slow-burn-lock`).disabled, true);
+        assert.equal(element(`${prefix}-slow-burn-next`).disabled, false);
+    }
 });

@@ -641,7 +641,7 @@ function diagnosticRecord(stage, data = {}, chat = diagnosticScope()) {
     for (const [key, value] of Object.entries(data)) {
         if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) values[key] = value;
         else if (key === 'writeTrace') values[key] = sanitizeWriteTrace(value);
-        else if (key === 'stageSource' && ['manual', 'reported', 'heat', 'intensity', 'unknown'].includes(value)) values[key] = value;
+        else if (key === 'stageSource' && ['manual', 'reported', 'heat', 'intensity', 'unknown', 'conflict'].includes(value)) values[key] = value;
         else if (key === 'reason' && /^[a-z_-]{1,48}$/.test(value)) values[key] = value;
         else if (key === 'missing' && Array.isArray(value)) values[key] = value.filter(v => ['state', 'location', 'characters', 'acts', 'intensity', 'stage', 'next'].includes(v));
     }
@@ -666,7 +666,7 @@ function diagnosticState() {
         refineRunning, pendingGenerations: generationEvents.length };
 }
 function diagnosticReport() {
-    return JSON.stringify({ extension: 'ttotto-unified', mode: 'sfw', version: '0.2.6', recording: diagnosticsEnabled(),
+    return JSON.stringify({ extension: 'ttotto-unified', mode: 'sfw', version: '0.2.7', recording: diagnosticsEnabled(),
         note: 'Memory-only; no API keys or dialogue contents. request_observed means the fetch boundary, not proof of model receipt. server_response_observed describes a bounded response copy at the fetch boundary, not guaranteed provider-original output if another wrapper precedes this one. Response/message links require matching bodies; unmatched or ambiguous results are unconfirmed. No raw bodies are exported.',
         bodyWriteNote: DIAGNOSTIC_NOTE, current: diagnosticState(), events: diagnosticRows }, null, 2);
 }

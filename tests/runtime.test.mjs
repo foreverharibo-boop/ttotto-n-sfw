@@ -37,7 +37,7 @@ test('unified core traces one write into both diagnostics and distinguishes save
         assert.equal(typeof descriptor.set, 'function');
         for (const kind of ['sfw', 'nsfw']) {
             const diag = r.runtime.diagnostics()[kind];
-            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.6');
+            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.7');
             const writes = diag.events.filter(e => e.stage === 'body_write');
             assert.equal(writes.length, 1); assert.equal(writes[0].data.ownWrite, true);
             assert.equal(writes[0].data.sameSceneBody, true);
@@ -452,10 +452,102 @@ for (const kind of ['sfw', 'nsfw']) test(`${kind}: invalidated stage never becom
         assert.match(r.prompts[PROMPT_KEY], /CURRENT STAGE 5\/6/);
         assert.doesNotMatch(r.prompts[PROMPT_KEY], /CURRENT STAGE UNCONFIRMED/);
         assert.equal(r.runtime.diagnostics()[kind].current.stageSource, 'reported');
-        // Genuine reported stage 1 remains valid; the fix must not force 5.
-        r.context.chat.push({ mes: 'A new beginning.' + stageFive.replaceAll('"stage":5', '"stage":1') });
+        // A consistent new beginning remains stage 1; heat alone must not force 5.
+        r.context.chat.push({ mes: 'A new beginning.' + stageFive.replaceAll('"stage":5', '"stage":1').replace('"heat":8', '"heat":5') });
         r.source.emit('MESSAGE_RECEIVED', 2);
         await r.runtime.intercept([], 1000, null, 'normal');
+        assert.match(r.prompts[PROMPT_KEY], /CURRENT STAGE 1\/6/);
+    } finally { r.runtime.stop(); }
+});
+
+for (const [heat, stage] of [[7, 1], [8, 1], [10, 2]]) test(`NSFW heat ${heat}/stage ${stage}: fresh and cached conflicts cannot cap the ongoing scene`, async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    let requests = 0;
+    r.context.generateRaw = async () => { requests++; throw Error('Unexpected AI call'); };
+    try {
+        const config = r.runtime.settings().engines.nsfw;
+        config.slowBurnEnabled = true; config.diagnosticsEnabled = true;
+        const report = tags(heat).replace('"stage":4', `"stage":${stage}`);
+        const message = { mes: 'Ongoing scene.' + report };
+        r.context.chat.push(message); r.source.emit('MESSAGE_RECEIVED', 0);
+        const saved = structuredClone(message.extra.ttottoUnifiedScene);
+        for (const reload of [false, true]) {
+            if (reload) { r.runtime.stop(); await r.runtime.start({ withUi: false }); }
+            await r.runtime.intercept([], 1000, null, 'normal');
+            assert.equal(r.runtime.owner(), 'nsfw');
+            assert.equal(r.runtime.settings().engines.nsfw.autoRefine, false);
+            const prompt = r.prompts[PROMPT_KEY];
+            assert.match(prompt, /CURRENT STAGE UNCONFIRMED/);
+            assert.match(prompt, /Reassess BOTH heat and stage/);
+            assert.match(prompt, /stage value 1 is a FORMAT PLACEHOLDER/);
+            assert.doesNotMatch(prompt, /CURRENT STAGE \d\/6|MAXIMUM CHARACTER-INITIATED STAGE|current cap \d/);
+            assert.match(prompt, /clothing: Coat/);
+            const diag = r.runtime.diagnostics().nsfw.current;
+            assert.equal(diag.currentHeat, heat); assert.equal(diag.currentStage, stage);
+            assert.equal(diag.stageSource, 'conflict'); assert.equal(diag.displayedStage, null);
+            assert.deepEqual(message.extra.ttottoUnifiedScene, saved);
+            assert.equal(requests, 0);
+        }
+        // Explicit user choices take priority even when the stored report conflicts.
+        const meta = r.runtime.features.nsfw.getChatMeta();
+        meta.slowBurnStageOverride = 1; meta.slowBurnLocked = true;
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.match(r.prompts[PROMPT_KEY], /CURRENT STAGE 1\/6/);
+        assert.match(r.prompts[PROMPT_KEY], /STAGE LOCKED BY USER/);
+        assert.equal(r.runtime.diagnostics().nsfw.current.stageSource, 'manual');
+        meta.slowBurnStageOverride = 4; meta.slowBurnLocked = false;
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.match(r.prompts[PROMPT_KEY], /CURRENT STAGE 4\/6/);
+        meta.slowBurnStageOverride = null;
+        // A fresh consistent report restores detection without rewriting the old one.
+        r.context.chat.push({ mes: 'Continuation.' + tags(8).replace('"stage":4', '"stage":5') });
+        r.source.emit('MESSAGE_RECEIVED', 1);
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.match(r.prompts[PROMPT_KEY], /CURRENT STAGE 5\/6/);
+        assert.doesNotMatch(r.prompts[PROMPT_KEY], /CURRENT STAGE UNCONFIRMED/);
+        assert.equal(r.runtime.diagnostics().nsfw.current.stageSource, 'reported');
+        assert.deepEqual(message.extra.ttottoUnifiedScene, saved);
+        assert.equal(requests, 0);
+    } finally { r.runtime.stop(); }
+});
+
+test('NSFW conflicting historical reports do not satisfy stage residence after recovery', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        r.runtime.settings().engines.nsfw.slowBurnEnabled = true;
+        r.runtime.settings().engines.nsfw.slowBurnIntensity = 'slow';
+        for (const heat of [8, 8, 8, 5]) {
+            r.context.chat.push({ mes: 'Scene.' + tags(heat).replace('"stage":4', '"stage":1') });
+            r.source.emit('MESSAGE_RECEIVED', r.context.chat.length - 1);
+            await r.runtime.intercept([], 1000, null, 'normal');
+        }
+        assert.match(r.prompts[PROMPT_KEY], /CURRENT STAGE 1\/6/);
+        assert.match(r.prompts[PROMPT_KEY], /MAXIMUM CHARACTER-INITIATED STAGE THIS RESPONSE: 1\/6/);
+        r.context.chat.push({ mes: 'Continued scene.' + tags(5).replace('"stage":4', '"stage":1') });
+        r.source.emit('MESSAGE_RECEIVED', r.context.chat.length - 1);
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.match(r.prompts[PROMPT_KEY], /MAXIMUM CHARACTER-INITIATED STAGE THIS RESPONSE: 2\/6/);
+    } finally { r.runtime.stop(); }
+});
+
+test('NSFW conflict guard preserves consistent stages and does not apply sexual heat rules to SFW', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        r.runtime.settings().engines.nsfw.slowBurnEnabled = true;
+        r.runtime.settings().engines.nsfw.diagnosticsEnabled = true;
+        for (const [heat, stage] of [[8, 4], [8, 5], [10, 6], [5, 1], [6, 2], [8, 3]]) {
+            r.context.chat.push({ mes: 'Scene.' + tags(heat).replace('"stage":4', `"stage":${stage}`) });
+            r.source.emit('MESSAGE_RECEIVED', r.context.chat.length - 1);
+            await r.runtime.intercept([], 1000, null, 'normal');
+            assert.match(r.prompts[PROMPT_KEY], new RegExp(`CURRENT STAGE ${stage}/6`));
+            assert.equal(r.runtime.diagnostics().nsfw.current.stageSource, 'reported');
+        }
+        // High narrative intensity can coexist with a new SFW scene at stage 1.
+        r.runtime.settings().engines.sfw.slowBurnEnabled = true;
+        r.context.chat.push({ mes: 'New scene.' + tags(1).replace('"intensity":4', '"intensity":8').replace('"stage":2', '"stage":1') });
+        r.source.emit('MESSAGE_RECEIVED', r.context.chat.length - 1);
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.equal(r.runtime.owner(), 'sfw');
         assert.match(r.prompts[PROMPT_KEY], /CURRENT STAGE 1\/6/);
     } finally { r.runtime.stop(); }
 });
