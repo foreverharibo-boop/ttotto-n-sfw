@@ -23,6 +23,90 @@ function setup({ chat = [], autoRefine = false } = {}) {
     return { runtime, context, source, prompts, toasts, writes };
 }
 
+test('NSFW main and existing repair share the observed-stage rule without extra requests or rationale fields', async () => {
+    const r = setup({ autoRefine: true }); await r.runtime.start({ withUi: false });
+    try {
+        const config = r.runtime.settings().engines.nsfw;
+        config.slowBurnEnabled = true; config.diagnosticsEnabled = true;
+        const message = { mes: 'PRIVATE_SCENE_BODY' + tags(8).replace('"stage":4', '"stage":6') };
+        r.context.chat.push(message); r.source.emit('MESSAGE_RECEIVED', 0);
+        let requests = 0, repairPrompt = '';
+        r.context.generateRaw = async ({ prompt }) => {
+            requests++; repairPrompt = prompt.map(row => row.content).join('\n');
+            return JSON.stringify({ ...nsfw, stage: 5, scene: sfw });
+        };
+        await r.runtime.intercept([], 1000, null, 'normal');
+        const mainPrompt = r.prompts[PROMPT_KEY];
+        assert.match(mainPrompt, /Stage 6 requires clear on-page evidence/);
+        assert.doesNotMatch(mainPrompt, /peak or conclusion permitted/i);
+        assert.equal(requests, 0);
+        assert.equal(r.runtime.diagnostics().nsfw.current.stageApplied, 6); // No silent migration.
+        assert.equal(await r.runtime.features.nsfw.runRefine({ manual: true }), true);
+        assert.equal(requests, 1);
+        for (const line of mainPrompt.split('\n').filter(line => /^(Sexual stage scale:|Stage 6 requires|Report observed progress)/.test(line))) {
+            assert.ok(repairPrompt.includes(line), line);
+        }
+        assert.match(repairPrompt, /do not add a rationale field/);
+        assert.equal(r.runtime.diagnostics().nsfw.current.stageApplied, 5);
+        assert.equal(message.mes, 'PRIVATE_SCENE_BODY');
+        r.runtime.poll(); r.runtime.poll();
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        assert.equal(requests, 1);
+        assert.doesNotMatch(JSON.stringify(r.runtime.diagnostics()), /PRIVATE_SCENE_BODY/);
+        assert.ok(r.runtime.diagnostics().nsfw.events.some(e => e.stage === 'slow_burn_policy_composed' && e.data.stageApplied === 6));
+    } finally { r.runtime.stop(); }
+});
+
+test('NSFW stage policy is absent when disabled or monitoring, including repair requests', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        let prompt = '', requests = 0;
+        r.context.generateRaw = async (args) => {
+            requests++; prompt = args.prompt.map(row => row.content).join('\n');
+            const state = { ...nsfw, heat: 0, scene: sfw }; delete state.stage;
+            return JSON.stringify(state);
+        };
+        r.context.chat.push({ mes: 'Monitoring.' + tags(0) }); r.source.emit('MESSAGE_RECEIVED', 0);
+        r.runtime.settings().engines.nsfw.slowBurnEnabled = true;
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.doesNotMatch(r.prompts[PROMPT_KEY], /Stage 6 requires clear on-page evidence/);
+        assert.equal(await r.runtime.features.nsfw.runRefine({ manual: true }), true);
+        assert.doesNotMatch(prompt, /Stage 6 requires clear on-page evidence/);
+        r.runtime.settings().engines.nsfw.slowBurnEnabled = false;
+        r.context.chat.push({ mes: 'Active.' + tags(8) }); r.source.emit('MESSAGE_RECEIVED', 1);
+        await r.runtime.intercept([], 1000, null, 'normal');
+        assert.doesNotMatch(r.prompts[PROMPT_KEY], /Stage 6 requires clear on-page evidence/);
+        assert.equal(await r.runtime.features.nsfw.runRefine({ manual: true }), true);
+        assert.doesNotMatch(prompt, /Stage 6 requires clear on-page evidence/);
+        assert.equal(requests, 2); // Only the two explicitly requested repairs.
+    } finally { r.runtime.stop(); }
+});
+
+test('NSFW diagnostics distinguish report, manual selection, progression cap and conclusion gate', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        const config = r.runtime.settings().engines.nsfw;
+        config.slowBurnEnabled = true; config.diagnosticsEnabled = true;
+        r.context.chat.push({ mes: 'Reply.' + tags(8) }); r.source.emit('MESSAGE_RECEIVED', 0);
+        const meta = r.runtime.features.nsfw.getChatMeta();
+        meta.slowBurnStageOverride = 5; meta.slowBurnLocked = true;
+        await r.runtime.intercept([], 1000, null, 'normal');
+        let diag = r.runtime.diagnostics().nsfw.current;
+        assert.equal(diag.currentStage, 4); assert.equal(diag.stageApplied, 5);
+        assert.equal(diag.stageSource, 'manual'); assert.equal(diag.stageManualOverride, true);
+        assert.equal(diag.stageCap, 5); assert.equal(diag.slowBurnConclusionBlocked, true);
+        assert.equal(diag.slowBurnLimitReason, 'manual_lock');
+        meta.slowBurnLocked = false; meta.slowBurnStageOverride = null;
+        await r.runtime.intercept([], 1000, null, 'normal');
+        diag = r.runtime.diagnostics().nsfw.current;
+        assert.equal(diag.stageApplied, 4); assert.equal(diag.slowBurnLimitReason, 'minimum_turns');
+        config.slowBurnEnabled = false;
+        diag = r.runtime.diagnostics().nsfw.current;
+        assert.equal(diag.slowBurnPolicyActive, false); assert.equal(diag.stageCapPresent, false);
+        assert.equal(diag.slowBurnConclusionBlocked, false); assert.equal(diag.slowBurnLimitReason, 'disabled');
+    } finally { r.runtime.stop(); }
+});
+
 test('unified core traces one write into both diagnostics and distinguishes saved stage from invalidated stage', async () => {
     const r = setup(); await r.runtime.start({ withUi: false });
     const oldLocation = globalThis.location;
@@ -37,7 +121,7 @@ test('unified core traces one write into both diagnostics and distinguishes save
         assert.equal(typeof descriptor.set, 'function');
         for (const kind of ['sfw', 'nsfw']) {
             const diag = r.runtime.diagnostics()[kind];
-            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.7');
+            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.8');
             const writes = diag.events.filter(e => e.stage === 'body_write');
             assert.equal(writes.length, 1); assert.equal(writes[0].data.ownWrite, true);
             assert.equal(writes[0].data.sameSceneBody, true);

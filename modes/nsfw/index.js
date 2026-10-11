@@ -193,8 +193,14 @@ const SLOW_BURN_STAGES = Object.freeze([
     { en: 'Initial light contact', ko: '가벼운 접촉' },
     { en: 'Deepening contact and reactions', ko: '접촉과 반응 심화' },
     { en: 'Explicit escalation', ko: '본격적인 전개' },
-    { en: 'Peak or conclusion permitted', ko: '마무리 허용' },
+    { en: 'Final phase actually reached', ko: '마지막 국면' },
 ]);
+
+const SLOW_BURN_STAGE_REPORT_RULES = [
+    'Sexual stage scale: 1 tension/atmosphere; 2 gaze/words/proximity; 3 initial light contact; 4 deepening contact/reactions; 5 main activity starting or continuing; 6 final phase actually reached. Judge the actual END of the latest response, independently of heat and nested narrative scene.stage.',
+    'Stage 6 requires clear on-page evidence that the current scene has reached its final phase. Strong wording, intense reactions, high heat, elapsed turns, predictions, wishes, or permission to finish are not such evidence. Main activity that has just begun or is continuing without final-phase evidence remains stage 5; do not force an ending to justify a stored 6.',
+    'Report observed progress, not the allowed maximum or a copied previous number. Permission to advance or conclude is a separate pacing rule, not evidence that advancement or conclusion occurred. Reassess against the latest prose. For stage assessment, populate the existing stage field only; do not add a rationale field. Keep all other required scene fields.',
+];
 
 const SLOW_BURN_MIN_TURNS = Object.freeze({
     gentle: 1,
@@ -494,6 +500,7 @@ function diagnosticRecord(stage, data = {}, chat = diagnosticScope()) {
     const values = {};
     for (const [key, value] of Object.entries(data)) {
         if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) values[key] = value;
+        else if (key === 'slowBurnLimitReason' && ['disabled', 'inactive', 'target_rule', 'stage_unknown', 'manual_lock', 'minimum_turns', 'stage_not_final', 'permitted'].includes(value)) values[key] = value;
         else if (key === 'writeTrace') values[key] = sanitizeWriteTrace(value);
         else if (key === 'stageSource' && ['manual', 'reported', 'heat', 'intensity', 'unknown', 'conflict'].includes(value)) values[key] = value;
         else if (key === 'reason' && /^[a-z_-]{1,48}$/.test(value)) values[key] = value;
@@ -521,13 +528,44 @@ function diagnosticCache(message) {
         ...(snapshot?.state?.heat !== null && snapshot?.state?.heat !== undefined ? { savedHeat: snapshot.state.heat } : {}),
     };
 }
+function diagnosticSlowBurn() {
+    const settings = getSettings();
+    const meta = getChatMeta(false);
+    const progress = slowBurnProgress(settings);
+    const active = Boolean(settings.slowBurnEnabled && isFullyArmed());
+    const targetHold = Boolean(progress.target.active && progress.target.remaining > 0);
+    const targetMode = Boolean(progress.target.active);
+    const reason = !settings.slowBurnEnabled ? 'disabled' : !active ? 'inactive'
+        : targetMode ? 'target_rule' : progress.stage === null ? 'stage_unknown'
+        : progress.locked ? 'manual_lock'
+        : progress.sessionRemaining > 0 || progress.stageRemaining > 0 ? 'minimum_turns'
+        : progress.stage !== 6 ? 'stage_not_final' : 'permitted';
+    const override = Number(meta?.slowBurnStageOverride);
+    return {
+        stageSource: progress.source,
+        stageAppliedPresent: progress.stage !== null,
+        ...(progress.stage !== null ? { stageApplied: progress.stage } : {}),
+        stageManualOverride: Number.isFinite(override) && override >= 1 && override <= 6,
+        slowBurnPolicyActive: active,
+        stageCapPresent: active && !targetMode && progress.maxStage !== null,
+        ...(active && !targetMode && progress.maxStage !== null ? { stageCap: progress.maxStage } : {}),
+        slowBurnTargetRule: active && targetMode,
+        slowBurnTargetHold: active && targetHold,
+        slowBurnUserOverrideAllowed: active && !targetMode && Boolean(settings.slowBurnUserOverride),
+        slowBurnConclusionBlocked: active && (targetMode || !progress.canConclude),
+        slowBurnLimitReason: reason,
+        slowBurnSessionRemaining: progress.sessionRemaining,
+        slowBurnStageRemaining: progress.stageRemaining,
+    };
+}
+
 function diagnosticState() {
     const stageInfo = slowBurnStageInfo();
     const settings = getContext().extensionSettings?.[MODULE_NAME] ?? {};
     const meta = getContext().chatMetadata?.[CHAT_STATE_KEY] ?? {};
     const current = effectiveState();
     const heat = current.state?.heat;
-    return { ...diagnosticStage(effectiveState().state, 'current'), displayedStage: stageInfo.stage, stageSource: stageInfo.source, enabled: Boolean(settings.enabled), chatEnabled: Boolean(meta.enabled), adultConfirmed: Boolean(settings.adultConfirmed),
+    return { ...diagnosticStage(effectiveState().state, 'current'), displayedStage: stageInfo.stage, stageSource: stageInfo.source, ...diagnosticSlowBurn(), enabled: Boolean(settings.enabled), chatEnabled: Boolean(meta.enabled), adultConfirmed: Boolean(settings.adultConfirmed),
         autoRefine: Boolean(settings.autoRefine), modeAuto: settings.armMode === 'auto', modeStealth: settings.armMode === 'stealth', modeManual: settings.armMode === 'manual',
         autoArmed: Boolean(meta.autoArmed), armedByHeat: Boolean(meta.autoArmed && meta.armSource === 'heat'), armedLocally: Boolean(meta.autoArmed && meta.armSource === 'local'), forceArmed: Boolean(meta.forceArmed), bridgePending: Boolean(meta.bridgePending),
         slowBurnEnabled: Boolean(settings.slowBurnEnabled), slowBurnSessionActive: Boolean(meta.slowBurnSessionActive),
@@ -538,7 +576,7 @@ function diagnosticState() {
         refineRunning, pendingGenerations: generationEvents.length };
 }
 function diagnosticReport() {
-    return JSON.stringify({ extension: 'ttotto-unified', mode: 'nsfw', version: '0.2.7', recording: diagnosticsEnabled(),
+    return JSON.stringify({ extension: 'ttotto-unified', mode: 'nsfw', version: '0.2.8', recording: diagnosticsEnabled(),
         note: 'Memory-only; no API keys or dialogue contents. request_observed means the fetch boundary, not proof of model receipt. server_response_observed describes a bounded response copy at the fetch boundary, not guaranteed provider-original output if another wrapper precedes this one. Response/message links require matching bodies; unmatched or ambiguous results are unconfirmed. No raw bodies are exported.',
         bodyWriteNote: DIAGNOSTIC_NOTE, current: diagnosticState(), events: diagnosticRows }, null, 2);
 }
@@ -1300,7 +1338,7 @@ function stateCompletenessIssues(state, settings = getSettings()) {
     if (!hasCharacterState) issues.push('characters');
     if (!state.acts?.length) issues.push('acts');
     if (state.heat === null || state.heat === undefined) issues.push('heat');
-    if (settings.slowBurnEnabled && (state.stage === null || state.stage === undefined)) issues.push('stage');
+    if (settings.slowBurnEnabled && isFullyArmed() && (state.stage === null || state.stage === undefined)) issues.push('stage');
     if (settings.nextBeatHints && !state.next?.length) issues.push('next');
     return issues;
 }
@@ -2004,6 +2042,7 @@ function buildTargetFinalEnforcementLines() {
 }
 
 function buildSlowBurnLines(settings) {
+    diagnosticRecord('slow_burn_policy_composed', { ...diagnosticStage(effectiveState().state, 'current'), ...diagnosticSlowBurn() });
     if (slowBurnTargetProgress().active) return buildTargetSlowBurnLines();
     const progress = slowBurnProgress(settings);
     if (progress.stage === null) return [
@@ -2086,7 +2125,7 @@ function stateReportLines(slowBurnEnabled, dialogueGuard, nextGuidance = '') {
         'The example heat value 0 is a format placeholder. Calculate heat from the actual END of the response; do not copy the example value. If prior recorded fields are missing, reconstruct them from the latest roleplay prose without inventing facts.',
     );
     if (slowBurnEnabled) lines.push(
-        'Sexual stage scale: 1 tension/atmosphere; 2 gaze/words/proximity; 3 initial light contact; 4 deepening contact/reactions; 5 explicit escalation; 6 peak or conclusion permitted. Judge the END of this response, independently of the nested narrative scene.stage.',
+        ...SLOW_BURN_STAGE_REPORT_RULES,
         'The example stage value 1 is a FORMAT PLACEHOLDER, not a default or instruction to restart. Sustained explicit activity (heat 7-10) is incompatible with atmosphere/approach only (stage 1-2). Recheck both values against the actual scene if they disagree; never fix a conflict by blindly converting heat into a stage.',
     );
     if (nextGuidance) lines.push(nextGuidance);
@@ -2279,7 +2318,7 @@ function buildRefineInput() {
 
 function refinePromptMessages() {
     const settings = getSettings();
-    const slowBurnEnabled = settings.slowBurnEnabled;
+    const slowBurnEnabled = settings.slowBurnEnabled && isFullyArmed();
     const dialogueGuard = Boolean(settings.dialogueBeatGuard);
     const stageSchema = slowBurnEnabled ? ',"stage":1' : '';
     const dialogueSchema = dialogueGuard ? ',"dialogue_beats":["0-3 dialogue intents from the final CHARACTER message, each \'English || 한국어\'"]' : '';
@@ -2288,7 +2327,7 @@ function refinePromptMessages() {
         ? '\n- "next" should draw on the CHARACTER PREFERENCES given in the user message where they fit the current scene; they are inspiration only, never a checklist.'
         : '';
     const stageRule = slowBurnEnabled
-        ? '\n- "stage" is the scene\'s slow-burn progression as an integer: 1 tension/atmosphere, 2 gaze/words/proximity, 3 initial light contact, 4 deepening contact/reactions, 5 explicit escalation, 6 peak or conclusion permitted.'
+        ? '\n' + SLOW_BURN_STAGE_REPORT_RULES.join('\n')
         : '';
     const system = `You are a scene-state tracker for an adult fiction roleplay log. All characters are adults. Read the log excerpt and return ONLY a JSON object, no markdown, no commentary.
 

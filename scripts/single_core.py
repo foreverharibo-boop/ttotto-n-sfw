@@ -5,6 +5,7 @@ builds the compatibility adapter to check retained feature behavior.
 The installed extension delegates all collection, ownership and injection to core.js.
 """
 import re
+from nsfw_stage_policy import adapt_stage_policy
 
 
 def adapt(source, kind):
@@ -76,7 +77,7 @@ function slowBurnStageInfo() {''', 1)
     # Unified diagnostics are labelled as the installed extension, not the
     # upstream feature versions. Body writes are observed once by core.js.
     source = source.replace('extension: MODULE_NAME, version: EXTENSION_VERSION, recording:',
-        f"extension: 'ttotto-unified', mode: '{kind}', version: '0.2.7', recording:")
+        f"extension: 'ttotto-unified', mode: '{kind}', version: '0.2.8', recording:")
     source = source.replace('current: diagnosticState(), events: diagnosticRows',
         'bodyWriteNote: DIAGNOSTIC_NOTE, current: diagnosticState(), events: diagnosticRows')
     source = source.replace('function clearDiagnostics() {',
@@ -204,7 +205,7 @@ function unifiedSceneReportInstruction() {
         source = source.replace("const prompt = armed ? [buildInjection(), unifiedHost?.companionPrompt?.()].filter(Boolean).join('\\n\\n') : '';", "const prompt = unifiedHost ? unifiedHost.preview('nsfw') : armed ? buildInjection() : '';")
     else:
         source = source.replace("const prompt = armed ? buildInjection() : '';", "const prompt = unifiedHost ? unifiedHost.preview('sfw') : armed ? buildInjection() : '';")
-    return source
+    return adapt_stage_policy(source) if kind == 'nsfw' else source
 
 
 def feature_api(kind):
