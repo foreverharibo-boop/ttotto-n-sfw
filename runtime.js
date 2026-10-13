@@ -1,6 +1,7 @@
 import { createModeFeatures as createSfw } from './modes/sfw/index.js';
 import { createSceneCore, SCENE_STORE_KEY } from './core.js';
 import { createModeFeatures as createNsfw } from './modes/nsfw/index.js';
+import { createConflictDiagnostics } from './conflict-diagnostics.js';
 
 export const SETTINGS_KEY = 'ttotto-unified';
 export const META_KEY = 'ttottoUnified';
@@ -123,6 +124,16 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         anyEnabled: () => kinds.some(kind => features[kind].getSettings().enabled) };
     const features = { nsfw: createNsfw(host), sfw: createSfw(host) };
     const core = createSceneCore({ raw: getContext, ready: chatReady, publish: publishPrompt, changed: uiChanged }, features);
+    const diagnosticsEnabled = () => kinds.some(kind => features[kind].getSettings().diagnosticsEnabled);
+    const conflicts = createConflictDiagnostics({ raw: getContext, ready: chatReady, enabled: diagnosticsEnabled });
+    function setDiagnosticsEnabled(value) {
+        for (const feature of Object.values(features)) {
+            feature.getSettings().diagnosticsEnabled = Boolean(value);
+            feature.syncDiagnosticFetch();
+        }
+        getContext().saveSettingsDebounced?.();
+        core.syncBodyDiagnostics(); conflicts.sync(); uiChanged();
+    }
     function ownerNow() { return active ? core.owner() : 'off'; }
     function updateOwner() {
         const next = ownerNow();
@@ -138,12 +149,15 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         const types = getContext().eventTypes ?? getContext().event_types ?? {};
         const name = Object.keys(types).find(key => types[key] === event);
         if (name === 'CHAT_CHANGED') { owner = null; clearTimeout(transitionTimer); }
+        conflicts.event(name);
         core.event(name, ...args);
+        conflicts.sync();
         uiChanged();
     }
     function poll() {
         if (!active) return;
         if (!chatReady()) { owner = null; clearTimeout(transitionTimer); }
+        conflicts.sync();
         core.refresh();
         if (ownerNow() !== owner) uiChanged();
     }
@@ -165,6 +179,7 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
     }
     function stop() {
         active = false;
+        conflicts.stop();
         clearInterval(pollTimer); pollTimer = null;
         clearTimeout(transitionTimer);
         // Reverse order unwinds the two opt-in diagnostic observers safely.
@@ -195,7 +210,9 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         features.sfw.persistChat();
     }
     return { features, core, settings, context, capture, dispatch, poll, start, stop, clean,
+        diagnosticsEnabled, setDiagnosticsEnabled,
+        clearDiagnostics: () => { features.sfw.clearDiagnostics(); features.nsfw.clearDiagnostics(); conflicts.clear(); },
         intercept, chatReady, owner: ownerNow, get active() { return active; },
-        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.2.7', owner: ownerNow(), core: core.diagnostics(),
+        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.2.10', owner: ownerNow(), core: core.diagnostics(), conflicts: conflicts.report(),
             sfw: JSON.parse(features.sfw.diagnosticReport()), nsfw: JSON.parse(features.nsfw.diagnosticReport()) }) };
 }

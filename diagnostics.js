@@ -107,11 +107,12 @@ export function diagnosticSafeScript(path) {
         && /^(?:\/script\.js|\/scripts\/(?:[a-zA-Z0-9_-]{1,64}\/){0,8}[a-zA-Z0-9_.-]{1,64}\.m?js)$/.test(path);
 }
 
-export function diagnosticWriteTrace(stack) {
+export function diagnosticWriteTrace(stack, skip = 1) {
     const lines = String(stack ?? '').split('\n').filter(line => line.trim() && line.trim() !== 'Error');
+    if (/^(?:[A-Za-z]*Error|DOMException)(?::|$)/.test(lines[0]?.trim() ?? '')) lines.shift();
     // The first frame is our setter. Keep the immediate caller even if unknown;
     // a recognized later frame must never be mistaken for the direct writer.
-    return lines.slice(1, 7).map(line => {
+    return lines.slice(skip, skip + 6).map(line => {
         const match = line.match(/(https?:\/\/[^\s()]+):(\d+):(\d+)\)?\s*$/);
         if (!match) return { source: 'unknown' };
         try {

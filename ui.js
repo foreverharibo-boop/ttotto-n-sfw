@@ -1,7 +1,7 @@
 const ownerLabels = { sfw: '일반 장면 추적 중', nsfw: '친밀 장면 추적 중', waiting: '채팅을 열면 장면을 추적해요', off: '사용 중지' };
 
 export function createUi(getRuntime) {
-    let overlay, status, notificationCheckbox, selected = 'sfw', lastFocus;
+    let overlay, status, notificationCheckbox, diagnosticCheckbox, selected = 'sfw', lastFocus;
     const arrangedPanels = new WeakSet();
     let sharedStatePanel, sharedFlowPanel, sharedStateKey;
     const el = (tag, text, cls) => {
@@ -68,12 +68,19 @@ export function createUi(getRuntime) {
             runtime.context('sfw').saveSettingsDebounced?.();
         });
         label.append(checkbox, document.createTextNode('자동 전환 알림 표시')); options.append(label);
+        const diagnosticLabel = el('label'); diagnosticCheckbox = el('input'); diagnosticCheckbox.type = 'checkbox';
+        diagnosticCheckbox.addEventListener('change', () => getRuntime().setDiagnosticsEnabled(diagnosticCheckbox.checked));
+        diagnosticLabel.append(diagnosticCheckbox, document.createTextNode('오류·충돌 진단 기록')); options.append(diagnosticLabel);
+        options.append(el('p', '문제가 있는 채팅에서 켜고 증상을 재현한 뒤 아래 기록을 내려받아 주세요. 본문·번역문·API 키는 포함하지 않습니다. 새로고침하면 기록이 사라집니다. 추적된 확장이 반드시 오류 원인이라는 뜻은 아닙니다.', 'ttu-state-note'));
         const diagnosticButton = el('button', '양쪽 진단 기록 내려받기', 'menu_button'); diagnosticButton.type = 'button';
         diagnosticButton.addEventListener('click', () => {
             const blob = new Blob([JSON.stringify(getRuntime().diagnostics(), null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob); const anchor = el('a'); anchor.href = url; anchor.download = 'ttotto-unified-diagnostics.json'; anchor.click();
             setTimeout(() => URL.revokeObjectURL(url), 1000);
-        }); options.append(diagnosticButton); menu.append(options);
+        }); options.append(diagnosticButton);
+        const clearButton = el('button', '진단 기록 비우기', 'menu_button'); clearButton.type = 'button';
+        clearButton.addEventListener('click', () => getRuntime().clearDiagnostics()); options.append(clearButton);
+        menu.append(options);
         return menu;
     }
     const fieldLabels = {
@@ -199,6 +206,7 @@ export function createUi(getRuntime) {
         const runtime = getRuntime(); status.textContent = ownerLabels[runtime.owner()];
         for (const button of overlay.querySelectorAll('[data-ttu-view]')) button.setAttribute('aria-pressed', String(button.dataset.ttuView === selected));
         notificationCheckbox.checked = Boolean(runtime.settings().transitionNotifications);
+        diagnosticCheckbox.checked = runtime.diagnosticsEnabled();
         for (const kind of ['sfw', 'nsfw']) {
             const panel = document.getElementById(`ttotto-${kind}-settings`);
             if (!panel) continue;

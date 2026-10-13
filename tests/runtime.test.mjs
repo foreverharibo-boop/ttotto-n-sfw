@@ -23,6 +23,27 @@ function setup({ chat = [], autoRefine = false } = {}) {
     return { runtime, context, source, prompts, toasts, writes };
 }
 
+test('common diagnostics switch tracks metadata, exports safely, clears and restores all watchers', async () => {
+    const message = { mes: 'PRIVATE_BODY', send_date: '2026-10-14T03:12:00+09:00', extra: { token_count: 1908, display_text: 'PRIVATE_TRANSLATION' } };
+    const r = setup({ chat: [message] }); await r.runtime.start({ withUi: false });
+    try {
+        r.runtime.setDiagnosticsEnabled(true);
+        for (const kind of ['sfw', 'nsfw']) assert.equal(r.runtime.settings().engines[kind].diagnosticsEnabled, true);
+        message.extra.token_count = 3095;
+        const report = r.runtime.diagnostics();
+        assert.equal(report.version, '0.2.10');
+        assert.ok(report.conflicts.events.some(row => row.stage === 'field_write' && row.data.after.number === 3095));
+        assert.doesNotMatch(JSON.stringify(report), /PRIVATE_BODY|PRIVATE_TRANSLATION/);
+        r.runtime.clearDiagnostics(); assert.equal(r.runtime.diagnostics().conflicts.events.length, 0);
+        r.runtime.setDiagnosticsEnabled(false);
+        assert.equal(r.runtime.diagnosticsEnabled(), false);
+        for (const [target, key] of [[message, 'mes'], [message, 'send_date'], [message.extra, 'token_count']]) {
+            assert.equal(Object.getOwnPropertyDescriptor(target, key).get, undefined);
+        }
+        assert.equal(message.mes, 'PRIVATE_BODY'); assert.equal(message.extra.token_count, 3095);
+    } finally { r.runtime.stop(); }
+});
+
 test('NSFW main and existing repair share the observed-stage rule without extra requests or rationale fields', async () => {
     const r = setup({ autoRefine: true }); await r.runtime.start({ withUi: false });
     try {
@@ -121,7 +142,7 @@ test('unified core traces one write into both diagnostics and distinguishes save
         assert.equal(typeof descriptor.set, 'function');
         for (const kind of ['sfw', 'nsfw']) {
             const diag = r.runtime.diagnostics()[kind];
-            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.9');
+            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.10');
             const writes = diag.events.filter(e => e.stage === 'body_write');
             assert.equal(writes.length, 1); assert.equal(writes[0].data.ownWrite, true);
             assert.equal(writes[0].data.sameSceneBody, true);
