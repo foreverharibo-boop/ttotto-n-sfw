@@ -576,7 +576,7 @@ function diagnosticState() {
         refineRunning, pendingGenerations: generationEvents.length };
 }
 function diagnosticReport() {
-    return JSON.stringify({ extension: 'ttotto-unified', mode: 'nsfw', version: '0.2.8', recording: diagnosticsEnabled(),
+    return JSON.stringify({ extension: 'ttotto-unified', mode: 'nsfw', version: '0.2.9', recording: diagnosticsEnabled(),
         note: 'Memory-only; no API keys or dialogue contents. request_observed means the fetch boundary, not proof of model receipt. server_response_observed describes a bounded response copy at the fetch boundary, not guaranteed provider-original output if another wrapper precedes this one. Response/message links require matching bodies; unmatched or ambiguous results are unconfirmed. No raw bodies are exported.',
         bodyWriteNote: DIAGNOSTIC_NOTE, current: diagnosticState(), events: diagnosticRows }, null, 2);
 }
@@ -1584,9 +1584,7 @@ function effectiveState() {
 }
 
 function stateForDisplay() {
-    const current = effectiveState();
-    if (current.source !== 'body-changed') return current;
-    return { state: snapshotForMessage(assistantMessages().at(-1))?.state ?? null, source: 'body-changed' };
+    return effectiveState();
 }
 
 function ignoredActSet() {
@@ -2495,6 +2493,7 @@ async function runRefine({ manual = false } = {}) {
     const targetSwipe = currentSwipeIndex(target);
     const targetText = recordBody(target.mes);
     const metadata = context.chatMetadata;
+    const recordUnchanged = captureRecordGuard(target);
     refineAbortController?.abort();
     refineAbortController = new AbortController();
     updateUi();
@@ -2506,6 +2505,10 @@ async function runRefine({ manual = false } = {}) {
             || getContext().chatMetadata !== metadata || !getContext().chat?.includes(target)
             || assistantMessages().at(-1) !== target
             || currentSwipeIndex(target) !== targetSwipe || recordBody(target.mes) !== targetText) { diagnosticRecord('refine_discarded', { reason: 'target_changed_or_disabled' }); return false; }
+        if (!recordUnchanged()) {
+            diagnosticRecord('refine_discarded', { reason: 'record_changed' });
+            return false;
+        }
         const state = parseRefineResponse(response);
         diagnosticRecord('refine_parsed', { characters: Object.keys(state.characters).length, heatPresent: state.heat !== null, heat: state.heat });
         const meta = getChatMeta();
@@ -3826,6 +3829,15 @@ function unifiedList(state, field, message) {
 
 function unifiedSceneReportInstruction() {
     return 'In the same scene_state JSON object (or the repair JSON object), include a "scene" object with the full end-of-response scene record. This is required even if no sfw_scene block is requested. Schema: "scene":{"location":"English || 한국어","time":"English || 한국어","environment":"English || 한국어","important_objects":{"object name":"current location/state, English || 한국어"},"characters":{"exact name":{"appearance":"appearance and clothing, English || 한국어","position":"posture/location, English || 한국어","holding":"carried or held items, English || 한국어","condition":"physical condition, English || 한국어"}},"scene_type":"general","intensity":0,"stage":1,"acts":[],"dialogue_beats":[],"dialogue_flow":{"topic":"English || 한국어","last_question":"English || 한국어","new_facts":[]},"next":[]}. Include every present character and relevant object. Unknown facts stay empty; never invent facts. scene.intensity and scene.stage describe narrative progression, independently of the top-level sexual heat and stage. Populate scene.acts, dialogue_beats, dialogue_flow and next from the current reply. If sfw_scene is also requested, its scene facts must agree with this record.';
+}
+
+function captureRecordGuard(message) {
+    const snapshot = snapshotForMessage(message);
+    const manual = getChatMeta(false)?.manualState;
+    const baseline = JSON.stringify([snapshot, manual]);
+    return () => snapshotForMessage(message) === snapshot
+        && getChatMeta(false)?.manualState === manual
+        && JSON.stringify([snapshotForMessage(message), getChatMeta(false)?.manualState]) === baseline;
 }
 
 function settleReport(message, state, fresh) {

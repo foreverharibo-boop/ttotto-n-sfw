@@ -121,7 +121,7 @@ test('unified core traces one write into both diagnostics and distinguishes save
         assert.equal(typeof descriptor.set, 'function');
         for (const kind of ['sfw', 'nsfw']) {
             const diag = r.runtime.diagnostics()[kind];
-            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.8');
+            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.9');
             const writes = diag.events.filter(e => e.stage === 'body_write');
             assert.equal(writes.length, 1); assert.equal(writes[0].data.ownWrite, true);
             assert.equal(writes[0].data.sameSceneBody, true);
@@ -876,7 +876,7 @@ test('intimate-only report collects and injects objects and full character facts
         r.context.chat[0].mes = 'Edited record.'; r.source.emit('MESSAGE_EDITED', 0);
         assert.equal(r.runtime.core.commonSummary().state, null);
         const display = r.runtime.core.commonSummary({ display: true });
-        assert.equal(display.valid, false); assert.equal(display.state.importantObjects.key.en, 'Desk');
+        assert.equal(display.valid, false); assert.equal(display.state, null);
         await r.runtime.intercept([], 0, null, 'normal');
         assert.ok(!r.prompts[PROMPT_KEY].includes('Important object "key": Desk'));
         r.context.chat[0].swipe_id = 1;

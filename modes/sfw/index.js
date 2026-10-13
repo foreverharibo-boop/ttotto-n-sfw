@@ -666,7 +666,7 @@ function diagnosticState() {
         refineRunning, pendingGenerations: generationEvents.length };
 }
 function diagnosticReport() {
-    return JSON.stringify({ extension: 'ttotto-unified', mode: 'sfw', version: '0.2.8', recording: diagnosticsEnabled(),
+    return JSON.stringify({ extension: 'ttotto-unified', mode: 'sfw', version: '0.2.9', recording: diagnosticsEnabled(),
         note: 'Memory-only; no API keys or dialogue contents. request_observed means the fetch boundary, not proof of model receipt. server_response_observed describes a bounded response copy at the fetch boundary, not guaranteed provider-original output if another wrapper precedes this one. Response/message links require matching bodies; unmatched or ambiguous results are unconfirmed. No raw bodies are exported.',
         bodyWriteNote: DIAGNOSTIC_NOTE, current: diagnosticState(), events: diagnosticRows }, null, 2);
 }
@@ -1656,15 +1656,7 @@ function effectiveState() {
 // Keep the saved report inspectable after an unknown body transformation. It is
 // explicitly unverified and must not become current prompt state by this route.
 function stateForDisplay() {
-    const current = effectiveState();
-    const meta = getChatMeta(false);
-    if ((unifiedHost ? !unifiedHost.isMode('sfw') : meta?.nsfwSuspended) || meta?.nsfwResumePending || ['manual', 'ai-refine'].includes(current.source)) return current;
-    const message = assistantMessages().at(-1);
-    const snapshot = snapshotForMessage(message);
-    if (snapshot?.state && !isPendingAssistant(message) && !snapshotMatchesMessage(message, snapshot)) {
-        return { state: snapshot.state, source: 'body-changed' };
-    }
-    return current;
+    return effectiveState();
 }
 
 function ignoredActSet() {
@@ -1937,11 +1929,11 @@ function nextBeatReport({ forDisplay = false } = {}) {
     if ((unifiedHost ? !unifiedHost.isMode('sfw') : meta?.nsfwSuspended) || !message || isPendingAssistant(message)) return { state: null, source: 'none' };
     const snapshot = snapshotForMessage(message);
     if (snapshotMatchesMessage(message, snapshot)) return { state: snapshot.state, source: 'tag' };
-    if (forDisplay && snapshot?.state) return { state: snapshot.state, source: 'body-changed' };
+    if (snapshot?.state) return { state: null, source: 'body-changed' };
     return { state: null, source: 'none' };
 }
 
-// 최신 답변의 후보만 필터링한다. 미검증 저장값은 화면에서만 확인한다.
+// 최신 답변의 후보만 필터링한다. 현재 본문과 일치하는 기록만 화면에도 표시한다.
 function nextBeatCandidates(options = {}) {
     const ignored = ignoredActSet();
     const { state } = options.sharedState ? { state: options.sharedState } : nextBeatReport(options);
@@ -2620,6 +2612,7 @@ async function runRefine({ manual = false } = {}) {
     queuedRefineTarget = null;
     refineRunning = true;
     activeRefineTarget = target;
+    const recordUnchanged = captureRecordGuard(target.message);
     diagnosticRecord('refine_started', { manual, message: target.index, swipe: target.swipeIndex });
 
     lastAutoRefineTarget = target;
@@ -2638,6 +2631,10 @@ async function runRefine({ manual = false } = {}) {
 
             queuedRefineTarget = currentTarget;
             console.debug(`${LOG_PREFIX} 보정 중 최신 답변이 바뀌어 이전 분석 결과를 폐기합니다.`);
+            return false;
+        }
+        if (!recordUnchanged()) {
+            diagnosticRecord('refine_discarded', { reason: 'record_changed' });
             return false;
         }
         diagnosticRecord('refine_parsed', { characters: Object.keys(state.characters ?? {}).length, missing: stateCompletenessIssues(state) });
@@ -3012,7 +3009,7 @@ function renderStatePanel() {
     const settings = getSettings();
     renderSlowBurnPanel(settings);
     renderCardLinkPanel(settings);
-    const sourceLabel = { 'body-changed': '저장 후 본문 변경 · 이전 수집값 표시 (현재 상태 미확인)', tag: '응답 태그에서 추적됨', 'ai-refine': '보조 AI 보정 결과', manual: '수동 수정됨', 'nsfw-resume': settings.autoRefine ? '최신 장면 수집 대기' : '최신 장면 수집 대기 · 자동 보정 꺼짐', 'missing-report': '최신 상태 보고 누락 · 상태 다시 분석으로 복구 가능 (추가 AI 호출)', none: '아직 기록 없음' }[source] ?? source;
+    const sourceLabel = { 'body-changed': '본문 변경 · 이전 기록 숨김 · 현재 본문 정보만 표시', tag: '응답 태그에서 추적됨', 'ai-refine': '보조 AI 보정 결과', manual: '수동 수정됨', 'nsfw-resume': settings.autoRefine ? '최신 장면 수집 대기' : '최신 장면 수집 대기 · 자동 보정 꺼짐', 'missing-report': '최신 상태 보고 누락 · 상태 다시 분석으로 복구 가능 (추가 AI 호출)', none: '아직 기록 없음' }[source] ?? source;
     const failed = refineFailure?.metadata === getContext().chatMetadata
         && sameRefineTarget(refineFailure.target, latestAssistantTarget());
     element('tsf-state-source').textContent = refineRunning ? '보조 AI 분석 중…'
@@ -3201,7 +3198,7 @@ function renderStatePanel() {
     nextSection.hidden = !settings.nextBeatHints || targetActive;
     element('tsf-next-empty').hidden = !settings.nextBeatHints || targetActive || beats.length > 0;
     element('tsf-next-source').textContent = nextBeatReport({ forDisplay: true }).source === 'body-changed'
-        ? '최신 답변에 저장된 후보 · 저장 후 본문 변경으로 현재 적용 보류'
+        ? '본문 변경 · 이전 후보 숨김 · 현재 답변의 후보 수집 대기'
         : beats.length ? '최신 답변에서 수집한 후보' : '최신 답변의 전개 후보 없음 · 과거 후보는 재사용하지 않아요.';
 
     // 수동 금지 목록
@@ -4011,6 +4008,15 @@ function buildUnifiedContinuityLines() {
     if (!state && !settings.transitionGuard && !settings.dialogueFlow) return [];
     lines.push('Apply continuity to the current intimate scene. These rules impose no SFW pace, stage cap, or requirement to end or cool the scene. Explicit USER changes supersede the recorded context; never force an already answered question or resolved topic back into the scene.');
     return lines;
+}
+
+function captureRecordGuard(message) {
+    const snapshot = snapshotForMessage(message);
+    const manual = getChatMeta(false)?.manualState;
+    const baseline = JSON.stringify([snapshot, manual]);
+    return () => snapshotForMessage(message) === snapshot
+        && getChatMeta(false)?.manualState === manual
+        && JSON.stringify([snapshotForMessage(message), getChatMeta(false)?.manualState]) === baseline;
 }
 
 function settleReport(message, state, fresh) {

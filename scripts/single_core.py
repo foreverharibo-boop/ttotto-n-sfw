@@ -77,7 +77,7 @@ function slowBurnStageInfo() {''', 1)
     # Unified diagnostics are labelled as the installed extension, not the
     # upstream feature versions. Body writes are observed once by core.js.
     source = source.replace('extension: MODULE_NAME, version: EXTENSION_VERSION, recording:',
-        f"extension: 'ttotto-unified', mode: '{kind}', version: '0.2.8', recording:")
+        f"extension: 'ttotto-unified', mode: '{kind}', version: '0.2.9', recording:")
     source = source.replace('current: diagnosticState(), events: diagnosticRows',
         'bodyWriteNote: DIAGNOSTIC_NOTE, current: diagnosticState(), events: diagnosticRows')
     source = source.replace('function clearDiagnostics() {',
@@ -109,6 +109,16 @@ function slowBurnStageInfo() {''', 1)
     controller('isFullyArmed', f"return isSupervising() && unifiedHost.isMode('{kind}');")
     controller('handleIncomingMessage', 'return unifiedHost.collect(index);')
     controller('observeLatestMessage', 'return;')
+    # A saved record for a different body is diagnostic history, not current
+    # scene data. Keep live Info_panel/manual fallbacks from effectiveState.
+    controller('stateForDisplay', 'return effectiveState();')
+    source = source.replace("if (forDisplay && snapshot?.state) return { state: snapshot.state, source: 'body-changed' };",
+        "if (snapshot?.state) return { state: null, source: 'body-changed' };")
+    source = source.replace('미검증 저장값은 화면에서만 확인한다.', '현재 본문과 일치하는 기록만 화면에도 표시한다.')
+    source = source.replace('최신 답변에 저장된 후보 · 저장 후 본문 변경으로 현재 적용 보류',
+        '본문 변경 · 이전 후보 숨김 · 현재 답변의 후보 수집 대기')
+    source = source.replace('저장 후 본문 변경 · 이전 수집값 표시 (현재 상태 미확인)',
+        '본문 변경 · 이전 기록 숨김 · 현재 본문 정보만 표시')
     controller('registerEvents', 'return;')
     controller('prepareSceneInjection', 'return unifiedHost.prepare(generationType, consumeBridge);')
     controller('clearInjectedPrompt', 'unifiedHost.invalidatePrompt(); return;')
@@ -205,6 +215,32 @@ function unifiedSceneReportInstruction() {
         source = source.replace("const prompt = armed ? [buildInjection(), unifiedHost?.companionPrompt?.()].filter(Boolean).join('\\n\\n') : '';", "const prompt = unifiedHost ? unifiedHost.preview('nsfw') : armed ? buildInjection() : '';")
     else:
         source = source.replace("const prompt = armed ? buildInjection() : '';", "const prompt = unifiedHost ? unifiedHost.preview('sfw') : armed ? buildInjection() : '';")
+    # Body identity alone is insufficient: a fresh report or manual edit can
+    # arrive while the body stays the same. Commit only against the record we
+    # started with. Identity detects replacement even within one millisecond;
+    # serialization also detects edits made in place.
+    target = 'target.message' if kind == 'sfw' else 'target'
+    anchor = '    activeRefineTarget = target;' if kind == 'sfw' else '    const metadata = context.chatMetadata;'
+    assert source.count(anchor) == 1
+    source = source.replace(anchor, anchor + f'\n    const recordUnchanged = captureRecordGuard({target});', 1)
+    start = source.index('async function runRefine(')
+    anchor = "        diagnosticRecord('refine_parsed', { characters: Object.keys(state.characters ?? {}).length, missing: stateCompletenessIssues(state) });" if kind == 'sfw' else '        const state = parseRefineResponse(response);'
+    assert source[start:].count(anchor) == 1
+    source = source[:start] + source[start:].replace(anchor, '''        if (!recordUnchanged()) {
+            diagnosticRecord('refine_discarded', { reason: 'record_changed' });
+            return false;
+        }
+''' + anchor, 1)
+    source += '''
+function captureRecordGuard(message) {
+    const snapshot = snapshotForMessage(message);
+    const manual = getChatMeta(false)?.manualState;
+    const baseline = JSON.stringify([snapshot, manual]);
+    return () => snapshotForMessage(message) === snapshot
+        && getChatMeta(false)?.manualState === manual
+        && JSON.stringify([snapshotForMessage(message), getChatMeta(false)?.manualState]) === baseline;
+}
+'''
     return adapt_stage_policy(source) if kind == 'nsfw' else source
 
 

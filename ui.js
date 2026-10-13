@@ -145,9 +145,7 @@ export function createUi(getRuntime) {
         sharedStateKey = key;
         sharedStatePanel.replaceChildren();
         if (!snapshot?.valid) {
-            sharedStatePanel.append(el('p', snapshot?.state
-                ? '저장 후 본문이 변경됐어요. 아래는 이 답변에 저장된 기록이며, 검증 전에는 다음 답변에 주입하지 않아요.'
-                : '아직 수집된 장면 정보가 없어요. 다음 응답에서 수집하거나 상태 다시 분석을 사용할 수 있어요.', 'ttu-state-note'));
+            sharedStatePanel.append(el('p', '현재 답변에 맞는 장면 기록을 기다리고 있어요. 다음 응답에서 수집하거나 상태 다시 분석을 사용할 수 있어요.', 'ttu-state-note'));
         }
         // Enrich the existing NSFW form instead of stacking a second full record.
         // Location, character cards, recent events and candidates stay in their

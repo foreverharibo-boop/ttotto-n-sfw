@@ -166,21 +166,17 @@ export function createSceneCore(host, features) {
         }
         commitMode();
     }
-    function commonSummary({ display = false } = {}) {
+    function commonSummary() {
         let snapshot = features.sfw.summary();
-        if (!isMode('nsfw')) return snapshot;
+        if (!isMode('nsfw')) return snapshot.valid ? snapshot : { ...snapshot, state: null };
         const intimateCurrent = features.nsfw.currentState();
-        const intimateSaved = features.nsfw.summary();
         const currentScene = intimateCurrent.state?.scene;
         if (currentScene) snapshot = { valid: true, state: currentScene };
-        else if (!snapshot.valid && display && intimateSaved.state?.scene) {
-            snapshot = { valid: false, state: intimateSaved.state.scene };
-        }
-        if (!snapshot.valid && !display) return { ...snapshot, state: null };
+        if (!snapshot.valid) return { ...snapshot, state: null };
         const state = structuredClone(snapshot.state ?? {});
         // The active mode's valid/manual facts win on overlapping fields. Do not
         // emit two contradictory locations or poses, or overwrite source reports.
-        const intimate = intimateCurrent.state ?? (display ? intimateSaved.state : null);
+        const intimate = intimateCurrent.state;
         const present = value => typeof value === 'string' ? value.trim() : value?.en || value?.ko;
         if (present(intimate?.location)) state.location = structuredClone(intimate.location);
         for (const [name, person] of Object.entries(intimate?.characters ?? {})) {
