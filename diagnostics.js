@@ -1,7 +1,8 @@
 // Shared, opt-in body-write diagnostics for the single scene core.
+const define = Object.defineProperty;
 export const DIAGNOSTIC_NOTE = 'body_write observes assignments to watched message fields, not the origin of computed text. writeTrace contains only same-origin client script paths and line/column numbers, never full URLs or raw stacks. Unknown frames and writes before observation or via object/descriptor replacement are unconfirmed. Change counts describe one enclosing difference range. No raw dialogue is exported.';
 export function sanitizeWriteTrace(value) {
-    return Array.isArray(value) ? value.slice(0, 6).map(frame =>
+    return Array.isArray(value) ? value.slice(0, 20).map(frame =>
         frame?.source === 'client_script' && diagnosticSafeScript(frame.script)
             && Number.isSafeInteger(frame.line) && frame.line > 0 && Number.isSafeInteger(frame.column) && frame.column > 0
             ? { source: 'client_script', script: frame.script, line: frame.line, column: frame.column }
@@ -21,7 +22,7 @@ export function createBodyDiagnostics(host) {
         const descriptor = Object.getOwnPropertyDescriptor(message, 'mes');
         // Leave any subsequently installed foreign descriptor alone.
         if (descriptor?.get === entry.get && descriptor?.set === entry.set && descriptor.configurable)
-            Object.defineProperty(message, 'mes', { ...entry.original, value: entry.value });
+            define(message, 'mes', { ...entry.original, value: entry.value });
         watches.delete(message);
     }
     function reset() { for (const message of watches.keys()) unwatch(message); }
@@ -43,7 +44,7 @@ export function createBodyDiagnostics(host) {
         const entry = { original: descriptor, value: descriptor.value, metadata: host.raw().chatMetadata, chatId: chatId(), swipe: host.swipe(message) };
         entry.get = function () { return entry.value; };
         entry.set = function (value) {
-            if (this !== message) { Object.defineProperty(this, 'mes', { value, writable: true, configurable: true, enumerable: true }); return; }
+            if (this !== message) { define(this, 'mes', { value, writable: true, configurable: true, enumerable: true }); return; }
             const old = entry.value;
             entry.value = value;
             if (writing || old === value) return;
@@ -61,7 +62,7 @@ export function createBodyDiagnostics(host) {
             finally { writing = false; }
         };
         try {
-            Object.defineProperty(message, 'mes', { configurable: true, enumerable: descriptor.enumerable, get: entry.get, set: entry.set });
+            define(message, 'mes', { configurable: true, enumerable: descriptor.enumerable, get: entry.get, set: entry.set });
             watches.set(message, entry);
             if (watches.size > 12) unwatch(watches.keys().next().value);
             host.record('body_write_trace_started', message, {});
@@ -112,7 +113,7 @@ export function diagnosticWriteTrace(stack, skip = 1) {
     if (/^(?:[A-Za-z]*Error|DOMException)(?::|$)/.test(lines[0]?.trim() ?? '')) lines.shift();
     // The first frame is our setter. Keep the immediate caller even if unknown;
     // a recognized later frame must never be mistaken for the direct writer.
-    return lines.slice(skip, skip + 6).map(line => {
+    return lines.slice(skip, skip + 20).map(line => {
         const match = line.match(/(https?:\/\/[^\s()]+):(\d+):(\d+)\)?\s*$/);
         if (!match) return { source: 'unknown' };
         try {

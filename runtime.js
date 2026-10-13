@@ -123,9 +123,12 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         filterSharedHints: beats => features.nsfw.filterSharedHints(beats),
         anyEnabled: () => kinds.some(kind => features[kind].getSettings().enabled) };
     const features = { nsfw: createNsfw(host), sfw: createSfw(host) };
-    const core = createSceneCore({ raw: getContext, ready: chatReady, publish: publishPrompt, changed: uiChanged }, features);
+    let conflicts;
+    const core = createSceneCore({ raw: getContext, ready: chatReady, publish: publishPrompt, changed: uiChanged,
+        diagnosticEvent: (...args) => conflicts?.bodyEvent(...args) }, features);
     const diagnosticsEnabled = () => kinds.some(kind => features[kind].getSettings().diagnosticsEnabled);
-    const conflicts = createConflictDiagnostics({ raw: getContext, ready: chatReady, enabled: diagnosticsEnabled });
+    conflicts = createConflictDiagnostics({ raw: getContext, ready: chatReady, enabled: diagnosticsEnabled,
+        onTarget: () => core.syncBodyDiagnostics() });
     function setDiagnosticsEnabled(value) {
         for (const feature of Object.values(features)) {
             feature.getSettings().diagnosticsEnabled = Boolean(value);
@@ -213,6 +216,6 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         diagnosticsEnabled, setDiagnosticsEnabled,
         clearDiagnostics: () => { features.sfw.clearDiagnostics(); features.nsfw.clearDiagnostics(); conflicts.clear(); },
         intercept, chatReady, owner: ownerNow, get active() { return active; },
-        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.2.10', owner: ownerNow(), core: core.diagnostics(), conflicts: conflicts.report(),
+        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.2.11', owner: ownerNow(), core: core.diagnostics(), conflicts: conflicts.report(),
             sfw: JSON.parse(features.sfw.diagnosticReport()), nsfw: JSON.parse(features.nsfw.diagnosticReport()) }) };
 }

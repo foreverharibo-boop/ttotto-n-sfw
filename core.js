@@ -18,6 +18,7 @@ export function createSceneCore(host, features) {
         swipe: message => features.sfw.currentSwipeIndex(message),
         body: text => features.nsfw.stripReport(features.sfw.stripReport(text)).trim(),
         record: (stage, message, data) => {
+            host.diagnosticEvent?.(stage, message, data);
             for (const kind of MODES) if (features[kind].getSettings().diagnosticsEnabled) features[kind].diagnosticRecord(stage, {
                 message: host.raw().chat.indexOf(message), swipe: features[kind].currentSwipeIndex(message),
                 ...data, ...features[kind].diagnosticCache(message),

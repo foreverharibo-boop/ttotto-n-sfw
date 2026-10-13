@@ -85,3 +85,84 @@ test('missing fields are not manufactured; later additions are observed on the n
     assert.ok(f.tracker.report().events.some(row => row.stage === 'data_observed_change'));
     assert.doesNotMatch(JSON.stringify(f.tracker.report()), /PRIVATE/);
 });
+
+test('direct whole-message replacement retains writer and immediately watches the new message', t => {
+    const f = setup(t); f.tracker.sync();
+    vm.runInNewContext('chat[0]={mes:"PRIVATE_NEW",extra:{token_count:2000}};chat[0].extra.token_count=3095;', { chat: f.raw.chat },
+        { filename: 'http://local/scripts/extensions/third-party/replacer/index.js?PRIVATE_KEY' });
+    const rows = f.tracker.report().events;
+    const replaced = rows.find(row => row.stage === 'message_slot_write');
+    assert.equal(replaced.data.writeTrace[0].script, '/scripts/extensions/third-party/replacer/index.js');
+    assert.ok(rows.some(row => row.stage === 'field_write' && row.data.after.number === 3095));
+    assert.doesNotMatch(JSON.stringify(rows), /PRIVATE/);
+    f.tracker.stop(); assert.equal(Object.getOwnPropertyDescriptor(f.raw.chat, '0').get, undefined);
+});
+
+test('descriptor changes retain writers, native results and foreign accessors', t => {
+    const f = setup(t), originalDefine = Object.defineProperty; f.tracker.sync();
+    const getter = () => 3095;
+    vm.runInNewContext('Object.defineProperty(message.extra,"token_count",{get:getter,configurable:true});',
+        { message: f.raw.chat[0], Object, getter }, { filename: 'http://local/scripts/extensions/third-party/descriptor/index.js' });
+    const row = f.tracker.report().events.find(row => row.stage === 'descriptor_write');
+    assert.equal(row.data.writeTrace[0].script, '/scripts/extensions/third-party/descriptor/index.js');
+    assert.deepEqual(row.data.fields, ['token_count']);
+    assert.equal(Reflect.deleteProperty(f.raw.chat[0].extra, 'display_text'), true);
+    const locked = {}; originalDefine(locked, 'x', { value: 1 });
+    assert.equal(Reflect.defineProperty(locked, 'x', { value: 2 }), false);
+    assert.throws(() => Object.defineProperty(locked, 'x', { value: 2 }), TypeError);
+    f.tracker.stop(); assert.equal(Object.defineProperty, originalDefine);
+    assert.equal(Object.getOwnPropertyDescriptor(f.raw.chat[0].extra, 'token_count').get, getter);
+});
+
+test('chat splice, clearing and insertion preserve array behavior and rebind immediately', t => {
+    const f = setup(t), old = f.raw.chat[0], originalSplice = Array.prototype.splice; f.tracker.sync();
+    const next = { mes: 'PRIVATE_NEW', extra: { token_count: 3 } };
+    assert.deepEqual(f.raw.chat.splice(0, 1, next), [old]);
+    assert.equal(f.raw.chat.pop(), next); assert.equal(f.raw.chat.length, 0);
+    assert.equal(f.raw.chat.push(old), 1); old.extra.token_count = 7;
+    assert.ok(f.tracker.report().events.some(row => row.stage === 'chat_array_operation' && row.data.operation === 'splice'));
+    assert.ok(f.tracker.report().events.some(row => row.stage === 'field_write' && row.data.after.number === 7));
+    f.tracker.stop(); assert.equal(Array.prototype.splice, originalSplice);
+    assert.deepEqual(JSON.parse(JSON.stringify(f.raw.chat)), [JSON.parse(JSON.stringify(old))]);
+});
+
+test('timer writes retain the scheduler separately from the direct writer; disable restores timers', async t => {
+    const f = setup(t), timer = globalThis.setTimeout; f.tracker.sync();
+    const write = vm.runInNewContext('(function(message){message.extra.token_count=3095})', {}, { filename: 'http://local/script.js' });
+    await new Promise(resolve => vm.runInNewContext('setTimeout(function(){write(message);resolve()},0)',
+        { setTimeout, write, message: f.raw.chat[0], resolve }, { filename: 'http://local/scripts/extensions/third-party/scheduler/index.js' }));
+    const row = f.tracker.report().events.find(row => row.stage === 'field_write');
+    assert.equal(row.data.writeTrace[0].script, '/script.js');
+    assert.equal(row.data.asyncParents[0].kind, 'setTimeout');
+    assert.equal(row.data.asyncParents[0].writeTrace[0].script, '/scripts/extensions/third-party/scheduler/index.js');
+    f.raw.chat[0].extra.token_count = 4;
+    assert.deepEqual(f.tracker.report().events.filter(row => row.stage === 'field_write').at(-1).data.asyncParents, []);
+    f.tracker.stop(); assert.equal(globalThis.setTimeout, timer);
+});
+
+test('scheduled callbacks preserve this, arguments, cancellation and disable generation boundaries', async t => {
+    const f = setup(t), timer = globalThis.setTimeout; f.tracker.sync();
+    let called = false;
+    const handle = setTimeout(() => { called = true; }, 1); clearTimeout(handle);
+    await new Promise(resolve => setTimeout(function (value) { assert.equal(value, 17); assert.ok(this); resolve(); }, 3, 17));
+    assert.equal(called, false);
+    let done;
+    const completion = new Promise(resolve => { done = resolve; });
+    setTimeout(() => { f.raw.chat[0].extra.token_count = 9; done(); }, 5);
+    f.tracker.stop(); f.tracker.sync();
+    await completion;
+    assert.deepEqual(f.tracker.report().events.filter(row => row.stage === 'field_write').at(-1).data.asyncParents, []);
+    f.tracker.stop(); assert.equal(globalThis.setTimeout, timer);
+});
+
+test('hook displacement is reported and disabling does not erase another extension wrapper', t => {
+    const f = setup(t), original = Reflect.deleteProperty; f.tracker.sync();
+    const instrumented = Reflect.deleteProperty;
+    const foreign = function (...args) { return Reflect.apply(instrumented, this, args); };
+    Reflect.deleteProperty = foreign;
+    try {
+        assert.ok(f.tracker.report().hooks.displaced.includes('Reflect.deleteProperty'));
+        f.tracker.stop(); assert.equal(Reflect.deleteProperty, foreign);
+        assert.equal(Reflect.deleteProperty({ x: 1 }, 'x'), true);
+    } finally { Reflect.deleteProperty = original; }
+});

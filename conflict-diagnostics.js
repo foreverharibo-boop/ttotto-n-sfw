@@ -1,6 +1,8 @@
 import { diagnosticSafeScript, diagnosticWriteTrace } from './diagnostics.js';
+import { createDiagnosticHooks } from './diagnostic-hooks.js';
+const define = Object.defineProperty;
 
-export const CONFLICT_NOTE = 'Observed writes identify the immediate synchronous caller, not a proven root cause. DOM observations and replaced objects/descriptors have unknown writers. Loaded scripts are not an enabled-extension inventory. Handled errors, other devices, and changes before recording may be invisible. Only the latest assistant reply is watched. No dialogue, translation, prompts, error messages, request bodies, keys, or full URLs are exported. Records stay in this page memory and disappear on reload.';
+export const CONFLICT_NOTE = 'Write traces identify synchronous callers, not proven root causes. Watched chat-slot replacements and hooked DOM/descriptor operations retain caller stacks. Async parents cover timers, animation frames, microtasks and synchronous event dispatch while recording; native await continuations and previously registered callbacks may have no parent. Poll-only observations remain unattributed. Saved native references, direct delete, whole chat-array replacement, other realms/devices, changes before recording and silently handled errors can bypass hooks. Loaded scripts are not an enabled-extension inventory. Only the latest assistant reply is watched. No dialogue, translation, prompts, error messages, request bodies, keys, or full URLs are exported. Records stay in page memory and disappear on reload.';
 const FIELDS = ['send_date', 'gen_started', 'gen_finished', 'swipe_id'];
 const EXTRA_FIELDS = ['token_count', 'display_text', 'reasoning_duration', 'time_to_first_token'];
 const ERROR_NAMES = new Set(['Error', 'TypeError', 'ReferenceError', 'SyntaxError', 'RangeError', 'AbortError', 'TimeoutError']);
@@ -8,11 +10,41 @@ const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 export function createConflictDiagnostics(host) {
     const rows = [], slots = new Map(), identities = new WeakMap(), textIds = new Map();
-    let nextIdentity = 1, nextTextId = 1, current = null, metadata = null, chatId = null, index = -1;
+    let nextIdentity = 1, nextTextId = 1, current = null, metadata = null, chatId = null, index = -1, watchedChat = null;
     let lastData = null, lastDom = null, started = false, writing = false, observer = null, root = null;
     let dropped = 0, bucket = 0, inBucket = 0, sequence = 0;
     const salt = Math.random().toString(36);
     const live = () => host.ready() && host.enabled();
+    const hooks = createDiagnosticHooks({ live, raw: host.raw, domRelevant, domSnapshot,
+        arrayRelevant: target => target === watchedChat,
+        arrayOperation: (operation, beforeLength, afterLength, writeTrace, asyncParents) => {
+            record('chat_array_operation', { operation, beforeLength, afterLength, writeTrace, asyncParents,
+                writerLocated: writeTrace[0]?.source === 'client_script' });
+            sync();
+        },
+        domOperation: (operation, before, writeTrace, asyncParents) => {
+            const after = domSnapshot();
+            if (!before || !after || equal(before, after)) return;
+            record('dom_write', { operation, before, after, data: snapshot(), writeTrace, asyncParents,
+                writerLocated: writeTrace[0]?.source === 'client_script' });
+            lastDom = after;
+        },
+        targetFields: target => {
+            if (target !== watchedChat && target !== current && target !== current?.extra) return [];
+            if (!belongs()) return [];
+            if (target === host.raw().chat) return [String(index)];
+            if (target === current) return [...FIELDS, 'extra', 'mes'];
+            if (target === current?.extra) return EXTRA_FIELDS;
+            return [];
+        },
+        descriptorOperation: (operation, target, fields, writeTrace, asyncParents) => {
+            record('descriptor_write', { operation, target: target === host.raw().chat ? 'chat_slot' : target === current ? 'message' : 'extra',
+                fields, writeTrace, asyncParents, writerLocated: writeTrace[0]?.source === 'client_script' });
+            sync();
+        },
+        eventOperation: (name, writeTrace, asyncParents) => record('event_dispatch', { name, writeTrace, asyncParents }),
+        consoleOperation: (kind, writeTrace, asyncParents, errorTrace) => record('console_report', { kind, writeTrace, asyncParents, errorTrace }),
+    });
     const id = value => {
         if (!value || typeof value !== 'object') return 0;
         if (!identities.has(value)) identities.set(value, nextIdentity++);
@@ -38,7 +70,7 @@ export function createConflictDiagnostics(host) {
                 : typeof value === 'string' && value.length < 80 ? Date.parse(value) : NaN;
             return { epochMs: Number.isFinite(epoch) ? epoch : null, value: typeof value === 'string' ? textInfo(value) : undefined };
         }
-        if (field === 'extra') return { objectId: id(value) };
+        if (field === 'extra' || field === 'chat_slot') return { objectId: id(value) };
         return { number: number(value) };
     }
     function record(stage, data = {}) {
@@ -46,14 +78,15 @@ export function createConflictDiagnostics(host) {
         const now = Date.now(), nextBucket = Math.floor(now / 1000);
         if (bucket !== nextBucket) { bucket = nextBucket; inBucket = 0; }
         if (++inBucket > 100) { dropped++; return; }
-        rows.push({ seq: ++sequence, at: now, stage, message: index, objectId: id(current), data });
+        rows.push({ seq: ++sequence, at: now, stage, message: index, objectId: id(current), data: { ...data,
+            ...(data.writeTrace && !data.asyncParents ? { asyncParents: hooks.parents() } : {}) } });
         if (rows.length > 500) { rows.shift(); dropped++; }
     }
     function restore(slot) {
         try {
             const descriptor = Object.getOwnPropertyDescriptor(slot.target, slot.key);
             if (descriptor?.get === slot.get && descriptor?.set === slot.set && descriptor.configurable) {
-                Object.defineProperty(slot.target, slot.key, { ...slot.original, value: slot.value });
+                define(slot.target, slot.key, { ...slot.original, value: slot.value });
             }
         } catch { /* A foreign proxy may have been revoked while recording. */ }
     }
@@ -72,21 +105,24 @@ export function createConflictDiagnostics(host) {
         const slot = { target, key, field, original: descriptor, value: descriptor.value };
         slot.get = function () { return slot.value; };
         slot.set = function (value) {
-            if (this !== target) { Object.defineProperty(this, key, { value, writable: true, configurable: true, enumerable: true }); return; }
+            if (this !== target) { define(this, key, { value, writable: true, configurable: true, enumerable: true }); return; }
+            let slotBelongs = false;
+            if (field === 'chat_slot') try { slotBelongs = belongs(); } catch { /* Preserve assignment. */ }
             const before = slot.value; slot.value = value;
             if (writing || before === value) return;
             writing = true;
             try {
-                if (!belongs() || field.startsWith('extra.') && current.extra !== target) return;
+                if (field === 'chat_slot' ? !slotBelongs : !belongs() || field.startsWith('extra.') && current.extra !== target) return;
                 const writeTrace = diagnosticWriteTrace(new Error().stack);
-                record('field_write', { field, before: valueInfo(field, before), after: valueInfo(field, value),
+                record(field === 'chat_slot' ? 'message_slot_write' : 'field_write', { field, before: valueInfo(field, before), after: valueInfo(field, value),
                     writerLocated: writeTrace[0]?.source === 'client_script', writeTrace });
                 if (field === 'extra') installExtra();
+                if (field === 'chat_slot') sync();
             } catch { /* Diagnostics must not reject the original assignment. */ }
             finally { writing = false; }
         };
         try {
-            Object.defineProperty(target, key, { configurable: true, enumerable: descriptor.enumerable, get: slot.get, set: slot.set });
+            define(target, key, { configurable: true, enumerable: descriptor.enumerable, get: slot.get, set: slot.set });
             slots.set(field, slot);
         } catch { record('watch_unavailable', { field }); }
     }
@@ -106,9 +142,15 @@ export function createConflictDiagnostics(host) {
         });
         lastData = value;
     }
-    function sampleDom() {
+    function domRelevant(node) {
+        if (!belongs()) return false;
+        const chatRoot = globalThis.document?.querySelector?.('#chat');
+        const target = node?.commonAncestorContainer ?? node;
+        return Boolean(chatRoot && target && (target === chatRoot || chatRoot.contains?.(target) || target.contains?.(chatRoot)));
+    }
+    function domSnapshot() {
         try {
-            if (!belongs()) return;
+            if (!belongs()) return null;
             const element = globalThis.document?.querySelector?.(`#chat .mes[mesid="${index}"]`);
             const info = selector => {
                 const text = element?.querySelector(selector)?.textContent;
@@ -116,8 +158,15 @@ export function createConflictDiagnostics(host) {
                 return (selector === '.mes_timer' || selector === '.tokenCounterDisplay') && numeric
                     ? { number: Number(numeric[1]), unit: numeric[2] } : textInfo(text);
             };
-            const value = element ? { elementId: id(element), timer: info('.mes_timer'), tokens: info('.tokenCounterDisplay'),
-                timestamp: info('.timestamp'), body: info('.mes_text'), swipe: textInfo(element.getAttribute('swipeid')) } : { present: false };
+            return element ? { elementId: id(element), timer: info('.mes_timer'), tokens: info('.tokenCounterDisplay'),
+                timestamp: info('.timestamp'), body: info('.mes_text'), markup: textInfo(element.innerHTML),
+                swipe: textInfo(element.getAttribute('swipeid')) } : { present: false };
+        } catch { return null; }
+    }
+    function sampleDom() {
+        try {
+            const value = domSnapshot();
+            if (!value) return;
             if (lastDom && !equal(value, lastDom)) record('display_observed_change', {
                 before: lastDom, after: value, data: snapshot(), writerLocated: false,
             });
@@ -148,19 +197,25 @@ export function createConflictDiagnostics(host) {
     }
     function start() {
         started = true;
+        hooks.start();
         globalThis.addEventListener?.('error', onError); globalThis.addEventListener?.('unhandledrejection', onError);
         record('recording_started');
     }
     function stop() {
+        hooks.stop();
         detach(); observer?.disconnect(); observer = null; root = null;
         globalThis.removeEventListener?.('error', onError); globalThis.removeEventListener?.('unhandledrejection', onError);
-        started = false; current = null; metadata = null; chatId = null; index = -1; lastData = lastDom = null;
+        started = false; current = null; metadata = null; chatId = null; index = -1; watchedChat = null; lastData = lastDom = null;
     }
     function sync() {
         try {
             if (!live()) { if (started) stop(); return; }
             if (!started) start();
             const raw = host.raw(), nextId = raw.getCurrentChatId?.() ?? raw.chatId;
+            if (watchedChat && watchedChat !== raw.chat) record('chat_array_replaced', {
+                beforeObjectId: id(watchedChat), afterObjectId: id(raw.chat), writerLocated: false,
+            });
+            watchedChat = raw.chat;
             let nextIndex = (raw.chat?.length ?? 0) - 1;
             while (nextIndex >= 0 && (!raw.chat[nextIndex] || raw.chat[nextIndex].is_user || raw.chat[nextIndex].is_system)) nextIndex--;
             const message = raw.chat?.[nextIndex] ?? null;
@@ -172,11 +227,13 @@ export function createConflictDiagnostics(host) {
                 record(replacement ? 'message_object_replaced' : 'target_changed', { previousId, writerLocated: false });
             }
             if (current) {
+                install(raw.chat, String(index), 'chat_slot');
                 for (const key of FIELDS) install(current, key, key);
                 install(current, 'extra', 'extra'); installExtra();
                 sampleData();
             }
             listenDom(); sampleDom();
+            host.onTarget?.();
         } catch { /* Best-effort diagnostics cannot stop scene processing. */ }
     }
     function event(name) {
@@ -197,13 +254,16 @@ export function createConflictDiagnostics(host) {
         }
         const observedWriters = {};
         for (const row of rows) {
-            if (row.stage !== 'field_write') continue;
+            if (!['field_write', 'message_slot_write', 'descriptor_write', 'dom_write', 'body_write'].includes(row.stage)) continue;
             const direct = row.data.writeTrace?.[0];
             const path = direct?.source === 'client_script' ? direct.script : 'unknown';
             observedWriters[path] = (observedWriters[path] ?? 0) + 1;
         }
-        return { recording: live(), note: CONFLICT_NOTE, limit: 500, dropped, observedWriters,
+        return { recording: live(), note: CONFLICT_NOTE, limit: 500, dropped, observedWriters, hooks: hooks.status(),
             loadedScripts: [...new Set(loadedScripts)], events: structuredClone(rows) };
     }
-    return { sync, event, stop, clear, report };
+    function bodyEvent(stage, message, data) {
+        if (stage === 'body_write' && message === current && belongs()) record(stage, data);
+    }
+    return { sync, event, stop, clear, report, bodyEvent };
 }
