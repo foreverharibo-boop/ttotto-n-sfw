@@ -77,7 +77,7 @@ function slowBurnStageInfo() {''', 1)
     # Unified diagnostics are labelled as the installed extension, not the
     # upstream feature versions. Body writes are observed once by core.js.
     source = source.replace('extension: MODULE_NAME, version: EXTENSION_VERSION, recording:',
-        f"extension: 'ttotto-unified', mode: '{kind}', version: '0.2.11', recording:")
+        f"extension: 'ttotto-unified', mode: '{kind}', version: '0.2.12', recording:")
     source = source.replace('current: diagnosticState(), events: diagnosticRows',
         'bodyWriteNote: DIAGNOSTIC_NOTE, current: diagnosticState(), events: diagnosticRows')
     source = source.replace('function clearDiagnostics() {',

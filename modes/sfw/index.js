@@ -666,7 +666,7 @@ function diagnosticState() {
         refineRunning, pendingGenerations: generationEvents.length };
 }
 function diagnosticReport() {
-    return JSON.stringify({ extension: 'ttotto-unified', mode: 'sfw', version: '0.2.11', recording: diagnosticsEnabled(),
+    return JSON.stringify({ extension: 'ttotto-unified', mode: 'sfw', version: '0.2.12', recording: diagnosticsEnabled(),
         note: 'Memory-only; no API keys or dialogue contents. request_observed means the fetch boundary, not proof of model receipt. server_response_observed describes a bounded response copy at the fetch boundary, not guaranteed provider-original output if another wrapper precedes this one. Response/message links require matching bodies; unmatched or ambiguous results are unconfirmed. No raw bodies are exported.',
         bodyWriteNote: DIAGNOSTIC_NOTE, current: diagnosticState(), events: diagnosticRows }, null, 2);
 }
@@ -1152,10 +1152,18 @@ function getChatMeta(create = true) {
     return meta;
 }
 
-function saveChatMeta() {
+function saveChatMeta(__diagParent = null) {
+    const __diagOperation = unifiedHost?.diagnosticBegin?.('sfw', 'saveChatMeta', __diagParent);
+    try {
     const context = getContext();
-    if (typeof context.saveMetadataDebounced === 'function') context.saveMetadataDebounced();
-    else if (typeof context.saveMetadata === 'function') void context.saveMetadata();
+    if (typeof context.saveMetadataDebounced === 'function') { unifiedHost?.diagnosticPoint?.(__diagOperation, 'save_scheduled'); context.saveMetadataDebounced(); }
+    else if (typeof context.saveMetadata === 'function') void diagnosticSaveResult(__diagOperation, context.saveMetadata());
+    } catch (__diagError) {
+        unifiedHost?.diagnosticError?.(__diagOperation, __diagError);
+        throw __diagError;
+    } finally {
+        unifiedHost?.diagnosticEnd?.(__diagOperation);
+    }
 }
 
 // 감시 중: 이 채팅에서 확장이 동작할 조건이 다 켜져 있는 상태 (최소한 상태 태그는 수집)
@@ -2507,6 +2515,8 @@ function refineProfileOverrides(context, service, profileId, settings) {
 }
 
 async function requestRefine(signal) {
+    const __diagOperation = unifiedHost?.diagnosticBegin?.('sfw', 'requestRefine', signal);
+    try {
     const context = getContext();
     const settings = getSettings();
     const prompt = refinePromptMessages();
@@ -2519,6 +2529,7 @@ async function requestRefine(signal) {
         .sort((left, right) => right - left);
     let lastError;
     for (const tokens of ladder) {
+        unifiedHost?.diagnosticPoint?.(__diagOperation, 'provider_attempt', { tokens, profile: Boolean(profileId), aborted: Boolean(signal?.aborted) });
         try {
             if (profileId) {
                 const service = context.ConnectionManagerRequestService;
@@ -2527,6 +2538,7 @@ async function requestRefine(signal) {
                 }
                 const overrides = refineProfileOverrides(context, service, profileId, settings);
                 const result = await service.sendRequest(profileId, prompt, tokens, { stream: false, signal, extractData: true }, overrides);
+                unifiedHost?.diagnosticPoint?.(__diagOperation, 'provider_returned', { tokens, text: typeof result === 'string', object: result !== null && typeof result === 'object' });
                 if (typeof result === 'string') return result;
                 if (result && typeof result.content === 'string') return result.content;
                 throw new Error('보정 분석 연결 프로필이 텍스트를 반환하지 않았습니다.');
@@ -2534,17 +2546,28 @@ async function requestRefine(signal) {
             if (typeof context.generateRaw !== 'function') {
                 throw new Error('현재 연결을 통한 백그라운드 생성을 사용할 수 없습니다.');
             }
-            return await context.generateRaw({ prompt, responseLength: tokens, trimNames: false, signal });
+            const result = await context.generateRaw({ prompt, responseLength: tokens, trimNames: false, signal });
+            unifiedHost?.diagnosticPoint?.(__diagOperation, 'provider_returned', { tokens, text: typeof result === 'string' });
+            return result;
         } catch (error) {
+        unifiedHost?.diagnosticCaught?.(__diagOperation, error);
             lastError = error;
             if (error?.name === 'AbortError' || !isTokenLimitError(error)) throw error;
             console.warn(`${LOG_PREFIX} 토큰 상한 ${tokens}이(가) 거부됨 — 더 작은 값으로 재시도합니다.`);
         }
     }
     throw lastError;
+    } catch (__diagError) {
+        unifiedHost?.diagnosticError?.(__diagOperation, __diagError);
+        throw __diagError;
+    } finally {
+        unifiedHost?.diagnosticEnd?.(__diagOperation);
+    }
 }
 
-function parseRefineResponse(text) {
+function parseRefineResponse(text, __diagParent = null) {
+    const __diagOperation = unifiedHost?.diagnosticBegin?.('sfw', 'parseRefineResponse', __diagParent);
+    try {
     const clean = String(text ?? '').replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
     const start = clean.indexOf('{');
     const end = clean.lastIndexOf('}');
@@ -2553,12 +2576,19 @@ function parseRefineResponse(text) {
     try {
         raw = parseStateJson(clean.slice(start, end + 1));
     } catch (error) {
+        unifiedHost?.diagnosticCaught?.(__diagOperation, error);
         console.warn(`${LOG_PREFIX} 보조 응답 JSON 해석 실패`, error);
         throw new Error('AI 분석 응답의 JSON 형식이 잘못되었거나 중간에 잘렸어요. 이번 결과는 저장하지 않았어요.');
     }
     const state = sanitizeState(raw);
     if (!state) throw new Error('보정 분석 결과가 비어 있습니다.');
     return state;
+    } catch (__diagError) {
+        unifiedHost?.diagnosticError?.(__diagOperation, __diagError);
+        throw __diagError;
+    } finally {
+        unifiedHost?.diagnosticEnd?.(__diagOperation);
+    }
 }
 
 function messageTextHash(text) {
@@ -2590,23 +2620,25 @@ function latestAssistantTarget() {
 }
 
 async function runRefine({ manual = false } = {}) {
-    if (unifiedHost) { if (!unifiedHost.canRefine('sfw', manual)) return false; }
-    if (unifiedHost && !unifiedHost.chatReady()) return null;
+    const __diagOperation = unifiedHost?.diagnosticBegin?.('sfw', 'runRefine');
+    try {
+    if (unifiedHost) { if (!unifiedHost.canRefine('sfw', manual)) { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 1, reason: 'mode_or_generation_guard', accepted: false }); return false; } }
+    if (unifiedHost && !unifiedHost.chatReady()) { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 2, reason: 'chat_not_ready', accepted: false }); return null; }
     const settings = getSettings();
-    if (!runtimeActive || !settings.enabled || !getChatMeta(false)?.enabled || refineRunning) return false;
-    if (!manual && !settings.autoRefine) return false;
-    if (generationEvents.some((type) => ALLOWED_GENERATION_TYPES.has(type)) || holdsRewriteGeneration()) return false;
+    if (!runtimeActive || !settings.enabled || !getChatMeta(false)?.enabled || refineRunning) { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 3, reason: 'disabled_or_busy', accepted: false }); return false; }
+    if (!manual && !settings.autoRefine) { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 4, reason: 'automatic_off', accepted: false }); return false; }
+    if (generationEvents.some((type) => ALLOWED_GENERATION_TYPES.has(type)) || holdsRewriteGeneration()) { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 5, reason: 'main_generation_pending', accepted: false }); return false; }
     if (syncNsfwSuspension()) {
         if (manual) toastr.info('현재 친밀 장면 모드에서는 일반 장면 보정을 쉬어요.', '🫧또또SFW');
-        return false;
+        { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 6, reason: 'other_mode', accepted: false }); return false; }
     }
     if (assistantMessages().length < 1) {
         if (manual) toastr.info('분석할 AI 응답이 아직 없어요.', '🫧또또SFW');
-        return false;
+        { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 7, reason: 'no_assistant', accepted: false }); return false; }
     }
 
     const target = latestAssistantTarget();
-    if (!target || isPendingAssistant(target.message)) return false;
+    if (!target || isPendingAssistant(target.message)) { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 8, reason: 'target_pending', accepted: false }); return false; }
     clearTimeout(refineTimer);
     refineTimer = null;
     queuedRefineTarget = null;
@@ -2622,20 +2654,21 @@ async function runRefine({ manual = false } = {}) {
     updateUi();
 
     try {
+        unifiedHost?.diagnosticBind?.(controller.signal, __diagOperation);
         const response = await awaitRefineResponse(controller.signal);
         if (controller.signal.aborted || !runtimeActive || !getSettings().enabled
-            || !getChatMeta(false)?.enabled || syncNsfwSuspension()) return false;
-        const state = parseRefineResponse(response);
+            || !getChatMeta(false)?.enabled || syncNsfwSuspension()) { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 9, reason: 'cancelled_or_disabled', accepted: false }); return false; }
+        const state = parseRefineResponse(response, __diagOperation);
         const currentTarget = latestAssistantTarget();
         if (!sameRefineTarget(currentTarget, target)) {
 
             queuedRefineTarget = currentTarget;
             console.debug(`${LOG_PREFIX} 보정 중 최신 답변이 바뀌어 이전 분석 결과를 폐기합니다.`);
-            return false;
+            { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 10, reason: 'target_changed', accepted: false }); return false; }
         }
         if (!recordUnchanged()) {
             diagnosticRecord('refine_discarded', { reason: 'record_changed' });
-            return false;
+            { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 11, reason: 'record_changed', accepted: false }); return false; }
         }
         diagnosticRecord('refine_parsed', { characters: Object.keys(state.characters ?? {}).length, missing: stateCompletenessIssues(state) });
         // 응답에 명시된 정보 패널은 모델의 보정 추론보다 우선한다.
@@ -2657,32 +2690,39 @@ async function runRefine({ manual = false } = {}) {
             messageSignature: target.contentSignature,
             signatureVersion: 2,
         };
-        persistChat();
+        persistChat(__diagOperation);
         meta.manualState = { state, at: refinedAt, source: 'ai-refine', target: currentStateTarget() };
         meta.nsfwResumePending = false;
         diagnosticRecord('refine_saved', { message: target.index, swipe: target.swipeIndex, characters: Object.keys(state.characters ?? {}).length });
 
-        saveChatMeta();
+        saveChatMeta(__diagOperation);
         if (manual) toastr.success('보조 AI가 장면 상태를 다시 잡았어요.', '🫧또또SFW');
-        return true;
+        { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 12, reason: 'saved', accepted: true }); return true; }
     } catch (error) {
+        unifiedHost?.diagnosticCaught?.(__diagOperation, error);
         if (error?.name === 'AbortError') {
 
             if (sameRefineTarget(lastAutoRefineTarget, target)) lastAutoRefineTarget = null;
-            return false;
+            { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 13, reason: 'aborted', accepted: false }); return false; }
         }
         diagnosticRecord('refine_failed', { message: target.index, aborted: error?.name === 'AbortError' });
         refineFailure = { metadata: getContext().chatMetadata, target };
         console.error(`${LOG_PREFIX} 보정 분석 실패`, error);
 
         if (manual) toastr.error(`보정 분석 실패: ${error?.message ?? error}`, '🫧또또SFW');
-        return false;
+        { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 14, reason: 'failed', accepted: false }); return false; }
     } finally {
         refineRunning = false;
         refineAbortController = null;
         activeRefineTarget = null;
         if (runtimeActive) updateUi();
         if (queuedRefineTarget) scheduleAutoRefine();
+    }
+    } catch (__diagError) {
+        unifiedHost?.diagnosticError?.(__diagOperation, __diagError);
+        throw __diagError;
+    } finally {
+        unifiedHost?.diagnosticEnd?.(__diagOperation);
     }
 }
 
@@ -2792,26 +2832,45 @@ function messageEntryByIndex(index) {
 }
 
 function rerenderMessage(index, message) {
+    const __diagOperation = unifiedHost?.diagnosticBegin?.('sfw', 'rerenderMessage');
+    try {
     const context = getContext();
     try {
         if (typeof context.updateMessageBlock === 'function') context.updateMessageBlock(Number(index), message);
     } catch (error) {
+        unifiedHost?.diagnosticCaught?.(__diagOperation, error);
         console.debug(`${LOG_PREFIX} 메시지 재렌더 생략`, error);
+    }
+    } catch (__diagError) {
+        unifiedHost?.diagnosticError?.(__diagOperation, __diagError);
+        throw __diagError;
+    } finally {
+        unifiedHost?.diagnosticEnd?.(__diagOperation);
     }
 }
 
-function persistChat() {
+function persistChat(__diagParent = null) {
+    const __diagOperation = unifiedHost?.diagnosticBegin?.('sfw', 'persistChat', __diagParent);
+    try {
     const context = getContext();
     try {
         if (typeof context.saveChatDebounced === 'function') {
-            context.saveChatDebounced();
+            { unifiedHost?.diagnosticPoint?.(__diagOperation, 'save_scheduled'); context.saveChatDebounced(); }
         } else if (typeof context.saveChat === 'function') {
-            Promise.resolve(context.saveChat()).catch((error) => {
+            Promise.resolve(diagnosticSaveResult(__diagOperation, context.saveChat())).catch((error) => {
+                unifiedHost?.diagnosticCaught?.(__diagOperation, error);
                 console.debug(`${LOG_PREFIX} 채팅 저장 생략`, error);
             });
         }
     } catch (error) {
+        unifiedHost?.diagnosticCaught?.(__diagOperation, error);
         console.debug(`${LOG_PREFIX} 채팅 저장 생략`, error);
+    }
+    } catch (__diagError) {
+        unifiedHost?.diagnosticError?.(__diagOperation, __diagError);
+        throw __diagError;
+    } finally {
+        unifiedHost?.diagnosticEnd?.(__diagOperation);
     }
 }
 
@@ -2879,6 +2938,8 @@ function populateProfiles() {
 }
 
 function applyManualEdit(mutator) {
+    const __diagOperation = unifiedHost?.diagnosticBegin?.('sfw', 'applyManualEdit');
+    try {
     const meta = getChatMeta();
     const { state } = stateForDisplay();
     const base = state ? structuredClone(state) : { location: '', characters: {}, acts: [] };
@@ -2886,6 +2947,12 @@ function applyManualEdit(mutator) {
     meta.manualState = { state: sanitizeState(base) ?? base, at: Date.now(), source: 'manual', target: currentStateTarget() };
     saveChatMeta();
     updateUi();
+    } catch (__diagError) {
+        unifiedHost?.diagnosticError?.(__diagOperation, __diagError);
+        throw __diagError;
+    } finally {
+        unifiedHost?.diagnosticEnd?.(__diagOperation);
+    }
 }
 
 function renderSlowBurnPanel(settings) {
@@ -3820,9 +3887,17 @@ function removeWandButton() {
 }
 
 async function loadSettingsHtml() {
+    const __diagOperation = unifiedHost?.diagnosticBegin?.('sfw', 'loadSettingsHtml');
+    try {
     const response = await fetch(new URL('settings.html', EXTENSION_BASE_URL));
     if (!response.ok) throw new Error(`settings.html 로드 실패 (HTTP ${response.status})`);
     return response.text();
+    } catch (__diagError) {
+        unifiedHost?.diagnosticError?.(__diagOperation, __diagError);
+        throw __diagError;
+    } finally {
+        unifiedHost?.diagnosticEnd?.(__diagOperation);
+    }
 }
 
 // Keep settings outside SillyTavern's extension tab, even with stale CSS.
@@ -3839,6 +3914,8 @@ function ensureSettingsHome() {
 }
 
 async function initializeUi() {
+    const __diagOperation = unifiedHost?.diagnosticBegin?.('sfw', 'initializeUi');
+    try {
     syncStateTagDisplayGuard();
     if (uiReady && document.getElementById('ttotto-sfw-settings')) {
         addWandButton();
@@ -3882,6 +3959,12 @@ async function initializeUi() {
     setTab('state');
     addWandButton();
     updateUi();
+    } catch (__diagError) {
+        unifiedHost?.diagnosticError?.(__diagOperation, __diagError);
+        throw __diagError;
+    } finally {
+        unifiedHost?.diagnosticEnd?.(__diagOperation);
+    }
 }
 
 // ───────────────────────── 이벤트 등록/수명주기 ─────────────────────────
@@ -3922,15 +4005,25 @@ function onActivate() {
 }
 
 function onEnable() {
+    const __diagOperation = unifiedHost?.diagnosticBegin?.('sfw', 'onEnable');
+    try {
     runtimeActive = true;
     clearLegacyDiagnostics();
     registerEvents();
     startMessageObserver();
     if (uiReady) addWandButton();
     requestInitialize();
+    } catch (__diagError) {
+        unifiedHost?.diagnosticError?.(__diagOperation, __diagError);
+        throw __diagError;
+    } finally {
+        unifiedHost?.diagnosticEnd?.(__diagOperation);
+    }
 }
 
 function onDisable() {
+    const __diagOperation = unifiedHost?.diagnosticBegin?.('sfw', 'onDisable');
+    try {
     runtimeActive = false;
     stopDiagnosticFetch();
     stopStateTagDisplayGuard();
@@ -3953,9 +4046,17 @@ function onDisable() {
         saveChatMeta();
     }
     clearInjectedPrompt();
+    } catch (__diagError) {
+        unifiedHost?.diagnosticError?.(__diagOperation, __diagError);
+        throw __diagError;
+    } finally {
+        unifiedHost?.diagnosticEnd?.(__diagOperation);
+    }
 }
 
 function onClean() {
+    const __diagOperation = unifiedHost?.diagnosticBegin?.('sfw', 'onClean');
+    try {
     onDisable();
     stopDiagnosticFetch();
     clearDiagnostics();
@@ -3978,6 +4079,12 @@ function onClean() {
     }
     context.saveSettingsDebounced();
     clearInjectedPrompt();
+    } catch (__diagError) {
+        unifiedHost?.diagnosticError?.(__diagOperation, __diagError);
+        throw __diagError;
+    } finally {
+        unifiedHost?.diagnosticEnd?.(__diagOperation);
+    }
 }
 
 
@@ -4059,6 +4166,17 @@ function leaveMode() {
     if (meta) { resetSlowBurnSession(meta); saveChatMeta(); }
 }
 
+function diagnosticRuntimeState() {
+    return { runtimeActive, uiReady, refineRunning, refineTimer: Boolean(refineTimer),
+        queuedRefineTarget: Boolean(queuedRefineTarget), lastAutoRefineTarget: Boolean(lastAutoRefineTarget),
+        refineFailure: Boolean(refineFailure), refineAbortController: Boolean(refineAbortController),
+        aborted: Boolean(refineAbortController?.signal.aborted), pendingGenerations: generationEvents.length };
+}
+
+function diagnosticSaveResult(task, result) {
+    return unifiedHost?.diagnosticPromise ? unifiedHost.diagnosticPromise(task, result) : result;
+}
+
 // END FEATURES
 
 function summary() {
@@ -4067,7 +4185,7 @@ function summary() {
     return { valid: snapshotMatchesMessage(message, snapshot), state: snapshot?.state ?? null,
         armed: isFullyArmed(), supervising: isSupervising(), diagnostics: diagnosticState() };
 }
-return {
+return { diagnosticRuntimeState,
     isSupervising, settleReport, resetFeatureSession, leaveMode, buildInjection, currentState: effectiveState,
     syncGeneration: events => { generationEvents = [...events]; },
     startSlowBurn: () => { if (getSettings().slowBurnEnabled && isFullyArmed()) startSlowBurnSessionIfNeeded(); },

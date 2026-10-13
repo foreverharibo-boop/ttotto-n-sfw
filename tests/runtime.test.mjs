@@ -31,7 +31,7 @@ test('common diagnostics switch tracks metadata, exports safely, clears and rest
         for (const kind of ['sfw', 'nsfw']) assert.equal(r.runtime.settings().engines[kind].diagnosticsEnabled, true);
         message.extra.token_count = 3095;
         const report = r.runtime.diagnostics();
-        assert.equal(report.version, '0.2.11');
+        assert.equal(report.version, '0.2.12');
         assert.ok(report.conflicts.events.some(row => row.stage === 'field_write' && row.data.after.number === 3095));
         assert.doesNotMatch(JSON.stringify(report), /PRIVATE_BODY|PRIVATE_TRANSLATION/);
         r.runtime.clearDiagnostics(); assert.equal(r.runtime.diagnostics().conflicts.events.length, 0);
@@ -41,6 +41,49 @@ test('common diagnostics switch tracks metadata, exports safely, clears and rest
             assert.equal(Object.getOwnPropertyDescriptor(target, key).get, undefined);
         }
         assert.equal(message.mes, 'PRIVATE_BODY'); assert.equal(message.extra.token_count, 3095);
+    } finally { r.runtime.stop(); }
+});
+
+for (const kind of ['sfw', 'nsfw']) test(`${kind}: internal operation links survive await and identify stale record rejection`, async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        r.context.chat.push({ mes: 'PRIVATE_BODY' + tags(kind === 'sfw' ? 0 : 8) }); r.source.emit('MESSAGE_RECEIVED', 0);
+        r.runtime.setDiagnosticsEnabled(true);
+        let release, started;
+        const ready = new Promise(resolve => { started = resolve; });
+        r.context.generateRaw = async () => { started(); return new Promise(resolve => { release = resolve; }); };
+        const work = r.runtime.features[kind].runRefine({ manual: true }); await ready;
+        let report = r.runtime.diagnostics().internal;
+        const run = report.events.find(row => row.stage === 'operation_started' && row.data.kind === kind && row.data.name === 'runRefine');
+        const request = report.events.find(row => row.stage === 'operation_started' && row.data.kind === kind && row.data.name === 'requestRefine');
+        assert.ok(run && request); assert.equal(request.data.parent, run.data.id);
+        assert.equal(report.current[`engine_${kind}.refineRunning`].value, true);
+        r.runtime.features[kind].getChatMeta().manualState = { state: { location: 'PRIVATE_MANUAL' }, at: Date.now() };
+        release(JSON.stringify(kind === 'sfw' ? sfw : { ...nsfw, scene: sfw }));
+        assert.equal(await work, false);
+        report = r.runtime.diagnostics().internal;
+        assert.ok(report.events.some(row => row.stage === 'operation_checkpoint' && row.data.id === run.data.id && row.data.stage === 'return' && row.data.accepted === false));
+        assert.ok(report.events.some(row => row.stage === 'operation_finished' && row.data.id === request.data.id));
+        assert.equal(report.current[`engine_${kind}.refineRunning`].value, false);
+        assert.doesNotMatch(JSON.stringify(r.runtime.diagnostics()), /PRIVATE_BODY|PRIVATE_MANUAL/);
+        r.runtime.setDiagnosticsEnabled(false);
+        assert.equal(Object.getOwnPropertyDescriptor(r.runtime.features[kind].getChatMeta(), 'manualState').get, undefined);
+    } finally { r.runtime.stop(); }
+});
+
+test('internal diagnostics record save completion and caught asynchronous failure without changing save results', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        r.runtime.setDiagnosticsEnabled(true);
+        r.context.saveChat = async () => 17;
+        r.runtime.features.sfw.persistChat(); await new Promise(resolve => setImmediate(resolve));
+        assert.ok(r.runtime.diagnostics().internal.events.some(row => row.stage === 'operation_checkpoint' && row.data.stage === 'save_promise_resolved'));
+        const error = new Error('PRIVATE_SAVE_ERROR'); error.status = 503;
+        r.context.saveChat = async () => { throw error; };
+        r.runtime.features.sfw.persistChat(); await new Promise(resolve => setImmediate(resolve));
+        const report = r.runtime.diagnostics().internal;
+        assert.ok(report.events.some(row => row.stage === 'operation_caught_error' && row.data.status === 503));
+        assert.doesNotMatch(JSON.stringify(report), /PRIVATE_SAVE_ERROR/);
     } finally { r.runtime.stop(); }
 });
 
@@ -142,7 +185,7 @@ test('unified core traces one write into both diagnostics and distinguishes save
         assert.equal(typeof descriptor.set, 'function');
         for (const kind of ['sfw', 'nsfw']) {
             const diag = r.runtime.diagnostics()[kind];
-            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.11');
+            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.12');
             const writes = diag.events.filter(e => e.stage === 'body_write');
             assert.equal(writes.length, 1); assert.equal(writes[0].data.ownWrite, true);
             assert.equal(writes[0].data.sameSceneBody, true);

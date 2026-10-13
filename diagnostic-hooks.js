@@ -49,7 +49,8 @@ export function createDiagnosticHooks(host) {
             CharacterData: ['appendData', 'deleteData', 'insertData', 'replaceData', 'replaceWith', 'remove', 'before', 'after'],
             Range: ['deleteContents', 'extractContents', 'insertNode', 'surroundContents'],
         };
-        const setters = { Node: ['textContent', 'nodeValue'], Element: ['innerHTML', 'outerHTML'], HTMLElement: ['innerText', 'outerText'], CharacterData: ['data'] };
+        const setters = { Node: ['textContent', 'nodeValue'], Element: ['innerHTML', 'outerHTML'], HTMLElement: ['innerText', 'outerText', 'hidden'], CharacterData: ['data'],
+            HTMLInputElement: ['value', 'checked', 'disabled'], HTMLSelectElement: ['value', 'selectedIndex', 'disabled'], HTMLTextAreaElement: ['value', 'disabled'] };
         for (const [name, keys] of Object.entries(methods)) for (const key of keys)
             patch(globalThis[name]?.prototype, key, `${name}.${key}`, domWrapper(`${name}.${key}`));
         for (const [name, keys] of Object.entries(setters)) for (const key of keys)

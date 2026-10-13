@@ -215,7 +215,8 @@ export function createSceneCore(host, features) {
         try {
             // Publish a complete composition once; clear it if preparation fails.
             return prepareInjection(type, consumeBridge);
-        } catch {
+        } catch (error) {
+            host.diagnosticFault?.(error);
             let cleared = false;
             try { host.publish(''); cleared = true; } catch { /* Host itself may be unavailable. */ }
             for (const feature of Object.values(features)) {

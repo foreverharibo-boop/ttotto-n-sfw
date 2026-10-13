@@ -166,3 +166,14 @@ test('hook displacement is reported and disabling does not erase another extensi
         assert.equal(Reflect.deleteProperty({ x: 1 }, 'x'), true);
     } finally { Reflect.deleteProperty = original; }
 });
+
+test('scene panel and readonly input changes are observed separately from the unchanged reply', t => {
+    const f = setup(t), control = { id: 'tsf-state-location', value: 'PRIVATE_OLD', checked: false };
+    const panel = { innerHTML: '<input>', hidden: false, className: 'panel', querySelectorAll: () => [control] };
+    globalThis.document.getElementById = name => name === 'tsf-panel-state' ? panel : null;
+    f.tracker.sync(); control.value = 'PRIVATE_NEW'; f.state.callback();
+    const row = f.tracker.report().events.find(row => row.stage === 'display_observed_change');
+    assert.ok(row); assert.deepEqual(row.data.before.body, row.data.after.body);
+    assert.notDeepEqual(row.data.before.panels[0].controls, row.data.after.panels[0].controls);
+    assert.doesNotMatch(JSON.stringify(f.tracker.report()), /PRIVATE/);
+});

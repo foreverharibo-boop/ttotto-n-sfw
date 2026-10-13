@@ -144,9 +144,12 @@ export function createConflictDiagnostics(host) {
     }
     function domRelevant(node) {
         if (!belongs()) return false;
-        const chatRoot = globalThis.document?.querySelector?.('#chat');
         const target = node?.commonAncestorContainer ?? node;
-        return Boolean(chatRoot && target && (target === chatRoot || chatRoot.contains?.(target) || target.contains?.(chatRoot)));
+        return domRoots().some(root => target && (target === root || root.contains?.(target) || target.contains?.(root)));
+    }
+    function domRoots() {
+        const document = globalThis.document;
+        return [document?.querySelector?.('#chat'), document?.getElementById?.('tsf-panel-state'), document?.getElementById?.('tns-panel-state')].filter(Boolean);
     }
     function domSnapshot() {
         try {
@@ -158,9 +161,17 @@ export function createConflictDiagnostics(host) {
                 return (selector === '.mes_timer' || selector === '.tokenCounterDisplay') && numeric
                     ? { number: Number(numeric[1]), unit: numeric[2] } : textInfo(text);
             };
+            const panels = ['tsf-panel-state', 'tns-panel-state'].map(key => {
+                const panel = globalThis.document?.getElementById?.(key);
+                if (!panel) return { present: false };
+                const controls = [...(panel.querySelectorAll?.('input,select,textarea') ?? [])].filter(node => !/diagnostic/.test(node.id ?? ''));
+                return { elementId: id(panel), hidden: Boolean(panel.hidden), className: textInfo(panel.className), markup: textInfo(panel.innerHTML),
+                    controls: controls.slice(0, 80).map(node => ({ value: textInfo(node.value), checked: Boolean(node.checked), disabled: Boolean(node.disabled) })),
+                    omittedControls: Math.max(0, controls.length - 80) };
+            });
             return element ? { elementId: id(element), timer: info('.mes_timer'), tokens: info('.tokenCounterDisplay'),
                 timestamp: info('.timestamp'), body: info('.mes_text'), markup: textInfo(element.innerHTML),
-                swipe: textInfo(element.getAttribute('swipeid')) } : { present: false };
+                swipe: textInfo(element.getAttribute('swipeid')), panels } : { present: false, panels };
         } catch { return null; }
     }
     function sampleDom() {
@@ -174,12 +185,12 @@ export function createConflictDiagnostics(host) {
         } catch { /* DOM can be detached while sampling. */ }
     }
     function listenDom() {
-        const nextRoot = globalThis.document?.querySelector?.('#chat');
-        if (root === nextRoot) return;
+        const nextRoot = domRoots();
+        if (root?.length === nextRoot.length && nextRoot.every((item, i) => root[i] === item)) return;
         observer?.disconnect(); observer = null; root = nextRoot;
-        if (root && typeof globalThis.MutationObserver === 'function') {
+        if (root.length && typeof globalThis.MutationObserver === 'function') {
             observer = new MutationObserver(sampleDom);
-            observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['mesid', 'swipeid'] });
+            for (const target of root) observer.observe(target, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['mesid', 'swipeid', 'hidden', 'class', 'style'] });
         }
     }
     function onError(event) {

@@ -2,6 +2,7 @@ import { createModeFeatures as createSfw } from './modes/sfw/index.js';
 import { createSceneCore, SCENE_STORE_KEY } from './core.js';
 import { createModeFeatures as createNsfw } from './modes/nsfw/index.js';
 import { createConflictDiagnostics } from './conflict-diagnostics.js';
+import { createInternalDiagnostics } from './internal-diagnostics.js';
 
 export const SETTINGS_KEY = 'ttotto-unified';
 export const META_KEY = 'ttottoUnified';
@@ -29,6 +30,8 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
     let owner = null, transitionTimer = null;
     const upstream = new Map();
     const metadataViews = new WeakMap(), settingsViews = new WeakMap();
+    let internal;
+    const diagnosticCall = (method, ...args) => { try { return internal?.[method](...args); } catch { return null; } };
     const settings = () => migratedContainer(getContext().extensionSettings, SETTINGS_KEY,
         { sfw: 'ttotto-sfw', nsfw: 'ttotto-nsfw' }, () => getContext().saveSettingsDebounced?.());
     function chatReady() {
@@ -73,7 +76,12 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         });
     }
     function publishPrompt(prompt = '') {
-        getContext().setExtensionPrompt(PROMPT_KEY, chatReady() ? prompt : '', 1, 0, false, 0);
+        const task = diagnosticCall('begin', 'core', 'publishPrompt');
+        try {
+            diagnosticCall('checkpoint', task, 'prompt', { chars: prompt.length, ready: chatReady() });
+            getContext().setExtensionPrompt(PROMPT_KEY, chatReady() ? prompt : '', 1, 0, false, 0);
+        } catch (error) { diagnosticCall('fail', task, error); throw error; }
+        finally { diagnosticCall('end', task); }
     }
     function subscribe() {
         const context = getContext(), types = context.eventTypes ?? context.event_types ?? {};
@@ -105,6 +113,14 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         return notify?.[level]?.(...args);
     }]));
     const host = { context, chatReady, capture, toasts, uiChanged, open,
+        diagnosticBegin: (kind, name, signal) => diagnosticCall('begin', kind, name, signal ? diagnosticCall('parent', signal) : null),
+        diagnosticEnd: task => diagnosticCall('end', task), diagnosticError: (task, error) => diagnosticCall('fail', task, error),
+        diagnosticCaught: (task, error) => diagnosticCall('caught', task, error),
+        diagnosticPromise: (task, result) => {
+            try { return internal?.observePromise(task, result) ?? result; } catch { return result; }
+        },
+        diagnosticPoint: (task, stage, data) => diagnosticCall('checkpoint', task, stage, data),
+        diagnosticBind: (signal, task) => diagnosticCall('bind', signal, task),
         syncBodyDiagnostics: () => core.syncBodyDiagnostics(), resetBodyDiagnostics: () => core.resetBodyDiagnostics(),
         messageStore: (...args) => core.messageStore(...args),
         clearRecords: (...args) => core.clearRecords(...args),
@@ -125,8 +141,20 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
     const features = { nsfw: createNsfw(host), sfw: createSfw(host) };
     let conflicts;
     const core = createSceneCore({ raw: getContext, ready: chatReady, publish: publishPrompt, changed: uiChanged,
-        diagnosticEvent: (...args) => conflicts?.bodyEvent(...args) }, features);
+        diagnosticEvent: (...args) => conflicts?.bodyEvent(...args),
+        diagnosticFault: error => { const task = diagnosticCall('begin', 'core', 'prepareInjection'); diagnosticCall('fail', task, error); diagnosticCall('end', task); } }, features);
     const diagnosticsEnabled = () => kinds.some(kind => features[kind].getSettings().diagnosticsEnabled);
+    internal = createInternalDiagnostics({ live: () => chatReady() && diagnosticsEnabled(), scope: () => getContext().chatMetadata,
+        flags: () => Object.fromEntries(kinds.map(kind => [kind, features[kind].diagnosticRuntimeState()])),
+        roots: () => {
+            const raw = getContext(), roots = { settings: raw.extensionSettings?.[SETTINGS_KEY], metadata: raw.chatMetadata?.[META_KEY] };
+            let count = 0;
+            for (let i = (raw.chat?.length ?? 0) - 1; i >= 0 && count < 8; i--) {
+                const message = raw.chat[i]; if (!message || message.is_user || message.is_system) continue;
+                roots[`record_${i}`] = message.extra?.[SCENE_STORE_KEY]; count++;
+            }
+            return roots;
+        } });
     conflicts = createConflictDiagnostics({ raw: getContext, ready: chatReady, enabled: diagnosticsEnabled,
         onTarget: () => core.syncBodyDiagnostics() });
     function setDiagnosticsEnabled(value) {
@@ -136,6 +164,7 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         }
         getContext().saveSettingsDebounced?.();
         core.syncBodyDiagnostics(); conflicts.sync(); uiChanged();
+        if (value) internal.resume(); else internal.stop();
     }
     function ownerNow() { return active ? core.owner() : 'off'; }
     function updateOwner() {
@@ -155,6 +184,7 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         conflicts.event(name);
         core.event(name, ...args);
         conflicts.sync();
+        internal.sample('event');
         uiChanged();
     }
     function poll() {
@@ -162,11 +192,13 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         if (!chatReady()) { owner = null; clearTimeout(transitionTimer); }
         conflicts.sync();
         core.refresh();
+        internal.sample('poll');
         if (ownerNow() !== owner) uiChanged();
     }
     async function start({ withUi = true } = {}) {
         if (active) return;
         active = true;
+        internal.resume();
         settings();
         for (const kind of kinds) {
             features[kind].getSettings(); features[kind].getChatMeta();
@@ -182,6 +214,7 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
     }
     function stop() {
         active = false;
+        internal.stop();
         conflicts.stop();
         clearInterval(pollTimer); pollTimer = null;
         clearTimeout(transitionTimer);
@@ -214,8 +247,8 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
     }
     return { features, core, settings, context, capture, dispatch, poll, start, stop, clean,
         diagnosticsEnabled, setDiagnosticsEnabled,
-        clearDiagnostics: () => { features.sfw.clearDiagnostics(); features.nsfw.clearDiagnostics(); conflicts.clear(); },
+        clearDiagnostics: () => { features.sfw.clearDiagnostics(); features.nsfw.clearDiagnostics(); conflicts.clear(); internal.clear(); },
         intercept, chatReady, owner: ownerNow, get active() { return active; },
-        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.2.11', owner: ownerNow(), core: core.diagnostics(), conflicts: conflicts.report(),
-            sfw: JSON.parse(features.sfw.diagnosticReport()), nsfw: JSON.parse(features.nsfw.diagnosticReport()) }) };
+        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.2.12', owner: ownerNow(), core: core.diagnostics(), conflicts: conflicts.report(),
+            internal: internal.report(), sfw: JSON.parse(features.sfw.diagnosticReport()), nsfw: JSON.parse(features.nsfw.diagnosticReport()) }) };
 }

@@ -71,7 +71,7 @@ export function createUi(getRuntime) {
         const diagnosticLabel = el('label'); diagnosticCheckbox = el('input'); diagnosticCheckbox.type = 'checkbox';
         diagnosticCheckbox.addEventListener('change', () => getRuntime().setDiagnosticsEnabled(diagnosticCheckbox.checked));
         diagnosticLabel.append(diagnosticCheckbox, document.createTextNode('오류·충돌 진단 기록')); options.append(diagnosticLabel);
-        options.append(el('p', '문제가 있는 채팅에서 켜고 증상을 재현한 뒤 아래 기록을 내려받아 주세요. 본문·번역문·API 키는 포함하지 않습니다. 새로고침하면 기록이 사라집니다. 추적된 확장이 반드시 오류 원인이라는 뜻은 아닙니다.', 'ttu-state-note'));
+        options.append(el('p', '문제가 있는 채팅에서 켜고 증상을 재현한 뒤 아래 기록을 내려받아 주세요. 화면·설정·장면 기록·분석·저장 과정을 함께 기록합니다. 본문·번역문·API 키는 포함하지 않습니다. 새로고침하면 기록이 사라집니다. 추적된 확장이 반드시 오류 원인이라는 뜻은 아닙니다.', 'ttu-state-note'));
         const diagnosticButton = el('button', '양쪽 진단 기록 내려받기', 'menu_button'); diagnosticButton.type = 'button';
         diagnosticButton.addEventListener('click', () => {
             const blob = new Blob([JSON.stringify(getRuntime().diagnostics(), null, 2)], { type: 'application/json' });
