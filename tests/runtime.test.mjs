@@ -11,6 +11,61 @@ const sfw = { location: 'Room || 방', time: 'Morning || 아침', environment: '
     scene_type: 'conversation', intensity: 4, stage: 2, next: ['Plan || 계획'] };
 const nsfw = { location: 'Room || 방', characters: { A: { clothing: 'Coat || 코트', position: 'Chair || 의자', contact: 'Hand || 손' } }, acts: ['Talk || 대화'], dialogue_beats: ['Question || 질문'], heat: 8, stage: 4, next: ['Listen || 듣기'] };
 const tags = (heat = 8) => `<scene_state>${JSON.stringify({ ...nsfw, heat })}</scene_state><sfw_scene>${JSON.stringify(sfw)}</sfw_scene>`;
+
+test('Archive cleanup during recovered-message hooks keeps both records and narrative diagnostics valid', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        r.runtime.setDiagnosticsEnabled(true);
+        const narrative = 'A opens the window.\n<Info_panel>Morning</Info_panel>';
+        const auxiliary = '\n\n<charm_now>{"operations":[]}</charm_now>\n';
+        const message = { mes: narrative + tags(8) + auxiliary, swipe_id: 0 };
+        r.context.chat.push(message);
+        // Reproduce the poll-before-receive order captured during Relay recovery.
+        r.runtime.poll();
+        const snapshots = Object.fromEntries(['sfw', 'nsfw'].map(kind => [kind, r.runtime.features[kind].snapshotForMessage(message)]));
+        assert.match(message.mes, /<charm_now>/, 'comparison must leave the foreign report for its owner');
+        for (const kind of ['sfw', 'nsfw']) assert.equal(r.runtime.features[kind].snapshotMatchesMessage(message), true);
+        message.mes = narrative; // Archive's completed-block cleanup
+        r.source.emit('MESSAGE_RECEIVED', 0);
+        for (const kind of ['sfw', 'nsfw']) {
+            const feature = r.runtime.features[kind];
+            assert.equal(feature.snapshotForMessage(message), snapshots[kind]);
+            assert.equal(feature.snapshotMatchesMessage(message), true);
+            const events = r.runtime.diagnostics()[kind].events;
+            assert.ok(!events.some(e => e.stage === 'cache_invalidated'));
+            assert.ok(events.some(e => e.stage === 'body_write' && !e.data.ownWrite && e.data.sameSceneBody));
+        }
+        await r.runtime.intercept([], 0, null, 'normal');
+        assert.match(r.prompts[PROMPT_KEY], /Room/);
+        assert.equal(r.runtime.core.commonSummary().valid, true);
+        message.mes = 'A closes the window.\n<Info_panel>Morning</Info_panel>';
+        r.source.emit('MESSAGE_EDITED', 0);
+        for (const kind of ['sfw', 'nsfw']) assert.equal(r.runtime.features[kind].snapshotMatchesMessage(message), false);
+    } finally { r.runtime.stop(); }
+});
+
+test('both modes ignore complete internal-report changes but retain unknown, malformed and narrative tags', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        for (const kind of ['sfw', 'nsfw']) {
+            const signature = mes => r.runtime.features[kind].messageStateSignature({ mes, swipe_id: 0 });
+            const baseline = signature('Before.\nAfter.');
+            for (const tag of ['charm_now', 'charm-now', 'charmnow', 'CHARM_NOW']) {
+                assert.equal(signature(`Before.\n<${tag}>{"operations":[]}</${tag}>\nAfter.`), baseline);
+                assert.equal(signature(`Before.\n<${tag}>changed internal data</${tag}>\nAfter.`), baseline);
+            }
+            assert.equal(signature('Before.\nAfter.' + tags(8)), baseline);
+            assert.equal(signature('Before.\nAfter.' + tags(1)), baseline);
+            for (const tag of ['Info_panel', 'dialogue', 'details', 'span', 'custom_state']) {
+                assert.notEqual(signature(`Before.<${tag}>Morning</${tag}>After.`), signature(`Before.<${tag}>Night</${tag}>After.`));
+            }
+            assert.notEqual(signature('Before.<charm_now>Morning'), signature('Before.<charm_now>Night'));
+            assert.notEqual(signature('Before.<charm_now>Morning</other>'), signature('Before.'));
+            assert.notEqual(signature('Before.<charm_now>Morning<charm_now>data</charm_now>'), signature('Before.'));
+            assert.notEqual(signature('Before.\nAfter.'), r.runtime.features[kind].messageStateSignature({ mes: 'Before.\nAfter.', swipe_id: 1 }));
+        }
+    } finally { r.runtime.stop(); }
+});
 function setup({ chat = [], autoRefine = false } = {}) {
     const source = new EventEmitter(), prompts = {}, toasts = [], writes = [];
     const eventTypes = Object.fromEntries(['GENERATION_STARTED', 'MESSAGE_RECEIVED', 'GENERATION_ENDED', 'GENERATION_STOPPED', 'CHARACTER_MESSAGE_RENDERED', 'MESSAGE_SWIPED', 'MESSAGE_EDITED', 'MESSAGE_DELETED', 'CHAT_CHANGED', 'CHAT_CREATED', 'CONNECTION_PROFILE_LOADED'].map(name => [name, name]));
@@ -31,7 +86,7 @@ test('common diagnostics switch tracks metadata, exports safely, clears and rest
         for (const kind of ['sfw', 'nsfw']) assert.equal(r.runtime.settings().engines[kind].diagnosticsEnabled, true);
         message.extra.token_count = 3095;
         const report = r.runtime.diagnostics();
-        assert.equal(report.version, '0.2.12');
+        assert.equal(report.version, '0.2.13');
         assert.ok(report.conflicts.events.some(row => row.stage === 'field_write' && row.data.after.number === 3095));
         assert.doesNotMatch(JSON.stringify(report), /PRIVATE_BODY|PRIVATE_TRANSLATION/);
         r.runtime.clearDiagnostics(); assert.equal(r.runtime.diagnostics().conflicts.events.length, 0);
@@ -185,7 +240,7 @@ test('unified core traces one write into both diagnostics and distinguishes save
         assert.equal(typeof descriptor.set, 'function');
         for (const kind of ['sfw', 'nsfw']) {
             const diag = r.runtime.diagnostics()[kind];
-            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.12');
+            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.13');
             const writes = diag.events.filter(e => e.stage === 'body_write');
             assert.equal(writes.length, 1); assert.equal(writes[0].data.ownWrite, true);
             assert.equal(writes[0].data.sameSceneBody, true);

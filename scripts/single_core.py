@@ -9,6 +9,11 @@ from nsfw_stage_policy import adapt_stage_policy
 
 
 def adapt(source, kind):
+    # Only complete, known auxiliary reports are non-narrative. An unfinished
+    # foreign tag must not hide the rest of a reply from stale-state checks.
+    marker = 'function canonicalSceneBody(text) {'
+    assert source.count(marker) == 1, (kind, 'canonical scene comparison')
+    source = source.replace(marker, marker + '\n    text = stripAuxiliarySceneReports(text);', 1)
     # Missing/unverified reports are not evidence of a stage-one scene. Keep
     # that uncertainty through the UI and prompt instead of feeding 1 back.
     source = source.replace("return { stage: 1, source: 'default' };",
@@ -77,7 +82,7 @@ function slowBurnStageInfo() {''', 1)
     # Unified diagnostics are labelled as the installed extension, not the
     # upstream feature versions. Body writes are observed once by core.js.
     source = source.replace('extension: MODULE_NAME, version: EXTENSION_VERSION, recording:',
-        f"extension: 'ttotto-unified', mode: '{kind}', version: '0.2.12', recording:")
+        f"extension: 'ttotto-unified', mode: '{kind}', version: '0.2.13', recording:")
     source = source.replace('current: diagnosticState(), events: diagnosticRows',
         'bodyWriteNote: DIAGNOSTIC_NOTE, current: diagnosticState(), events: diagnosticRows')
     source = source.replace('function clearDiagnostics() {',

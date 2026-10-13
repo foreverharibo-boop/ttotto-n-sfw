@@ -1,6 +1,7 @@
 // The sole scene engine. Feature libraries supply schemas, policy and controls;
 // they cannot subscribe, collect independently, negotiate ownership or inject.
 import { createBodyDiagnostics } from './diagnostics.js';
+import { stripAuxiliarySceneReports } from './scene-body.js';
 export const SCENE_STORE_KEY = 'ttottoUnifiedScene';
 const MODES = ['sfw', 'nsfw'];
 const GENERATION_TYPES = new Set(['normal', 'swipe', 'regenerate', 'continue']);
@@ -16,7 +17,7 @@ export function createSceneCore(host, features) {
     const bodyDiagnostics = createBodyDiagnostics({ raw: host.raw, ready: host.ready,
         enabled: () => MODES.some(kind => features[kind].getSettings().diagnosticsEnabled),
         swipe: message => features.sfw.currentSwipeIndex(message),
-        body: text => features.nsfw.stripReport(features.sfw.stripReport(text)).trim(),
+        body: text => stripAuxiliarySceneReports(features.nsfw.stripReport(features.sfw.stripReport(text))).trim(),
         record: (stage, message, data) => {
             host.diagnosticEvent?.(stage, message, data);
             for (const kind of MODES) if (features[kind].getSettings().diagnosticsEnabled) features[kind].diagnosticRecord(stage, {
