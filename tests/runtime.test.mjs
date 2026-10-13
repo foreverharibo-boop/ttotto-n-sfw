@@ -78,6 +78,56 @@ function setup({ chat = [], autoRefine = false } = {}) {
     return { runtime, context, source, prompts, toasts, writes };
 }
 
+for (const kind of ['sfw', 'nsfw']) test(`${kind}: real runtime counts new reply slots through delete, regenerate, branch and legacy migration`, async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        const report = tags(kind === 'nsfw' ? 8 : 0).replaceAll('"stage":4', '"stage":6').replaceAll('"stage":2', '"stage":6');
+        const add = n => {
+            r.context.chat.push({ is_user: true, send_date: `turn-${n}`, mes: 'Question.' }, { mes: `Reply ${n}.` + report });
+            r.source.emit('MESSAGE_RECEIVED', r.context.chat.length - 1);
+        };
+        const diag = () => r.runtime.diagnostics()[kind].current;
+        add(1); add(2);
+        const config = r.runtime.settings().engines[kind];
+        config.slowBurnEnabled = true; config.slowBurnIntensity = 'gentle';
+        await r.runtime.intercept([], 0, null, 'normal');
+        assert.equal(diag().slowBurnCountedTurns, 0);
+        assert.equal(diag().slowBurnSessionRemaining, 1);
+        add(3);
+        await r.runtime.intercept([], 0, null, 'normal');
+        assert.equal(diag().slowBurnCountedTurns, 1);
+        assert.equal(diag().slowBurnSessionRemaining, 0);
+        assert.equal(diag().slowBurnStageRemaining, 0);
+        if (kind === 'nsfw') assert.equal(diag().slowBurnConclusionBlocked, false);
+        r.context.chat.splice(0, 2); // Removing old history must not subtract an earned turn.
+        r.source.emit('MESSAGE_DELETED', 0);
+        assert.equal(diag().slowBurnCountedTurns, 1);
+        r.context.chat.pop(); r.source.emit('MESSAGE_DELETED', 3);
+        r.source.emit('GENERATION_STARTED', 'regenerate');
+        r.context.chat.push({ mes: 'Replacement reply.' + report });
+        r.source.emit('MESSAGE_RECEIVED', 3); r.source.emit('GENERATION_ENDED', 'regenerate');
+        await r.runtime.intercept([], 0, null, 'regenerate');
+        assert.equal(diag().slowBurnCountedTurns, 1);
+        assert.equal(diag().slowBurnStageRemaining, 0);
+        // Branch before activation. Baseline identities follow the copied
+        // conversation; the old absolute count must not become a debt.
+        r.context.chat = structuredClone(r.context.chat.slice(0, 2));
+        r.context.chatMetadata = structuredClone(r.context.chatMetadata);
+        r.context.chatId = 'earlier-branch'; r.source.emit('CHAT_CHANGED');
+        assert.equal(diag().slowBurnCountedTurns, 0);
+        add(4); await r.runtime.intercept([], 0, null, 'normal');
+        assert.equal(diag().slowBurnCountedTurns, 1);
+        assert.equal(diag().slowBurnStageRemaining, 0);
+        const meta = r.runtime.features[kind].getChatMeta();
+        delete meta.slowBurnTurnSession; meta.slowBurnSessionStartAssistantCount = 900;
+        assert.equal(diag().slowBurnLegacyRebased, true);
+        assert.equal(diag().slowBurnCountedTurns, 0);
+        add(5); await r.runtime.intercept([], 0, null, 'normal');
+        assert.equal(diag().slowBurnSessionRemaining, 0);
+        assert.equal(diag().slowBurnStageRemaining, 0);
+    } finally { r.runtime.stop(); }
+});
+
 test('common diagnostics switch tracks metadata, exports safely, clears and restores all watchers', async () => {
     const message = { mes: 'PRIVATE_BODY', send_date: '2026-10-14T03:12:00+09:00', extra: { token_count: 1908, display_text: 'PRIVATE_TRANSLATION' } };
     const r = setup({ chat: [message] }); await r.runtime.start({ withUi: false });
@@ -86,7 +136,7 @@ test('common diagnostics switch tracks metadata, exports safely, clears and rest
         for (const kind of ['sfw', 'nsfw']) assert.equal(r.runtime.settings().engines[kind].diagnosticsEnabled, true);
         message.extra.token_count = 3095;
         const report = r.runtime.diagnostics();
-        assert.equal(report.version, '0.2.13');
+        assert.equal(report.version, '0.2.14');
         assert.ok(report.conflicts.events.some(row => row.stage === 'field_write' && row.data.after.number === 3095));
         assert.doesNotMatch(JSON.stringify(report), /PRIVATE_BODY|PRIVATE_TRANSLATION/);
         r.runtime.clearDiagnostics(); assert.equal(r.runtime.diagnostics().conflicts.events.length, 0);
@@ -240,7 +290,7 @@ test('unified core traces one write into both diagnostics and distinguishes save
         assert.equal(typeof descriptor.set, 'function');
         for (const kind of ['sfw', 'nsfw']) {
             const diag = r.runtime.diagnostics()[kind];
-            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.13');
+            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.14');
             const writes = diag.events.filter(e => e.stage === 'body_write');
             assert.equal(writes.length, 1); assert.equal(writes[0].data.ownWrite, true);
             assert.equal(writes[0].data.sameSceneBody, true);
