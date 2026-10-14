@@ -583,7 +583,7 @@ function diagnosticState() {
         refineRunning, pendingGenerations: generationEvents.length };
 }
 function diagnosticReport() {
-    return JSON.stringify({ extension: 'ttotto-unified', mode: 'nsfw', version: '0.2.17', recording: diagnosticsEnabled(),
+    return JSON.stringify({ extension: 'ttotto-unified', mode: 'nsfw', version: '0.2.18', recording: diagnosticsEnabled(),
         note: 'Memory-only; no API keys or dialogue contents. request_observed means the fetch boundary, not proof of model receipt. server_response_observed describes a bounded response copy at the fetch boundary, not guaranteed provider-original output if another wrapper precedes this one. Response/message links require matching bodies; unmatched or ambiguous results are unconfirmed. No raw bodies are exported.',
         bodyWriteNote: DIAGNOSTIC_NOTE, current: diagnosticState(), events: diagnosticRows }, null, 2);
 }
@@ -2094,6 +2094,10 @@ function buildSlowBurnLines(settings) {
         `SESSION COUNT: ${progress.sessionTurns}/${progress.requiredTurns} responses since activation. Stage residence is unconfirmed.`,
         'Return the stage actually reached at the END of this response in the hidden report (integer 1-6), using the scale for this mode. Do not copy a fallback stage.',
     ];
+    if (progress.canConclude) return [
+        '[SLOW-BURN — COMPLETION PERMITTED]',
+        'The final-stage and minimum-response requirements are satisfied, and no stage lock is active. Allow the scene to conclude naturally or transition to what follows when it fits the conversation. Do not prolong it merely to satisfy slow burn or restart earlier beats. This is permission, not a requirement to end immediately.',
+    ];
     const current = SLOW_BURN_STAGES[progress.stage];
     const maximum = SLOW_BURN_STAGES[progress.maxStage];
     const lines = [
@@ -2263,7 +2267,7 @@ function buildInjection() {
                 '',
                 `SUGGESTED NEXT BEATS (pick one, or do something even better — never fall back to a banned beat): ${beats.map((beat) => biText(beat, 'en')).join(' / ')}`,
             );
-            if (settings.slowBurnEnabled) sections.push('These suggestions are subordinate to the mandatory slow-burn stage cap and no-conclusion lock. Ignore any suggestion that would skip, finish, or wind down the scene too early.');
+            if (settings.slowBurnEnabled && !slowBurnProgress(settings).canConclude) sections.push('These suggestions are subordinate to the mandatory slow-burn stage cap and no-conclusion lock. Ignore any suggestion that would skip, finish, or wind down the scene too early.');
         }
     }
 

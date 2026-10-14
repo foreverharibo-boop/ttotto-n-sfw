@@ -139,6 +139,20 @@ return { activateRuntime: () => { runtimeActive = true; }, onActivate, onEnable,
         continue
     source = adapt(source, kind)
     source = adapt_turn_counter(source)
+    if kind == 'nsfw':
+        # Once all completion gates pass, omit the entire progression-lock
+        # block, including its otherwise unconditional transition prohibition.
+        marker = "    const current = SLOW_BURN_STAGES[progress.stage];"
+        assert source.count(marker) == 1
+        source = source.replace(marker, """    if (progress.canConclude) return [
+        '[SLOW-BURN — COMPLETION PERMITTED]',
+        'The final-stage and minimum-response requirements are satisfied, and no stage lock is active. Allow the scene to conclude naturally or transition to what follows when it fits the conversation. Do not prolong it merely to satisfy slow burn or restart earlier beats. This is permission, not a requirement to end immediately.',
+    ];
+""" + marker, 1)
+        # Optional next-beat hints must not reintroduce a released lock.
+        marker = "if (settings.slowBurnEnabled) sections.push('These suggestions are subordinate"
+        assert source.count(marker) == 1
+        source = source.replace(marker, "if (settings.slowBurnEnabled && !slowBurnProgress(settings).canConclude) sections.push('These suggestions are subordinate", 1)
     helpers, exports = feature_api(kind)
     api = api.replace('return {\n    allowSharedHints:', 'return {' + exports + '\n    allowSharedHints:', 1) if kind == 'nsfw' else api.replace('return { handoffReport:', 'return {' + exports + ' handoffReport:', 1)
     source += helpers

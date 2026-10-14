@@ -292,6 +292,48 @@ for (const kind of ['sfw', 'nsfw']) test(`${kind}: real runtime counts new reply
     } finally { r.runtime.stop(); }
 });
 
+for (const scenario of ['ready', 'manual-ready', 'locked', 'session-short', 'stage-short', 'earlier-stage', 'target-active']) {
+    test(`NSFW completion prompt gates: ${scenario}`, async () => {
+        const r = setup(); await r.runtime.start({ withUi: false });
+        try {
+            const add = (n, stage = 6) => {
+                r.context.chat.push({ is_user: true, send_date: `completion-${n}`, mes: 'Question.' },
+                    { mes: `Reply ${n}.` + tags(8).replace('"stage":4', `"stage":${stage}`) });
+                r.source.emit('MESSAGE_RECEIVED', r.context.chat.length - 1);
+            };
+            add(0);
+            const config = r.runtime.settings().engines.nsfw;
+            Object.assign(config, { slowBurnEnabled: true, slowBurnIntensity: 'gentle', nextBeatHints: true });
+            await r.runtime.intercept([], 0, null, 'normal');
+            const meta = r.runtime.features.nsfw.getChatMeta();
+            if (scenario !== 'session-short') add(1, scenario === 'stage-short' || scenario === 'earlier-stage' ? 5 : 6);
+            if (scenario === 'locked') meta.slowBurnLocked = true;
+            if (scenario === 'manual-ready' || scenario === 'stage-short') meta.slowBurnStageOverride = 6;
+            if (scenario === 'target-active') {
+                config.developerMode = true;
+                Object.assign(meta, { slowBurnTarget: 'Discuss the plan', slowBurnTargetTurns: 3, slowBurnTargetActive: true });
+            }
+            const before = r.context.chat.map(m => m.mes);
+            await r.runtime.intercept([], 0, null, 'normal');
+            const prompt = r.prompts[PROMPT_KEY];
+            if (scenario === 'ready' || scenario === 'manual-ready') {
+                assert.match(prompt, /SLOW-BURN — COMPLETION PERMITTED/);
+                assert.match(prompt, /Allow the scene to conclude naturally or transition/);
+                assert.doesNotMatch(prompt, /MANDATORY SLOW-BURN LOCK|ABSOLUTE NO-CONCLUSION LOCK|MAXIMUM CHARACTER-INITIATED STAGE|PREMATURE-END RECOVERY|Do not skip ahead|These suggestions are subordinate/);
+                assert.equal(r.runtime.diagnostics().nsfw.current.slowBurnConclusionBlocked, false);
+                assert.match(prompt, /STATE REPORT/, 'bookkeeping still reports actual state');
+            } else {
+                assert.doesNotMatch(prompt, /SLOW-BURN — COMPLETION PERMITTED/);
+                assert.match(prompt, scenario === 'target-active' ? /USER-TARGET SLOW-BURN LOCK/ : /ABSOLUTE NO-CONCLUSION LOCK/);
+                if (scenario === 'locked') assert.match(prompt, /STAGE LOCKED BY USER/);
+            }
+            assert.deepEqual(r.context.chat.map(m => m.mes), before, 'only injected policy changes');
+            assert.equal(meta.autoArmed, true, 'completion permission does not force disarming');
+            assert.equal(Boolean(meta.bridgePending), false, 'no automatic bridge');
+        } finally { r.runtime.stop(); }
+    });
+}
+
 test('common diagnostics switch tracks metadata, exports safely, clears and restores all watchers', async () => {
     const message = { mes: 'PRIVATE_BODY', send_date: '2026-10-14T03:12:00+09:00', extra: { token_count: 1908, display_text: 'PRIVATE_TRANSLATION' } };
     const r = setup({ chat: [message] }); await r.runtime.start({ withUi: false });
@@ -300,7 +342,7 @@ test('common diagnostics switch tracks metadata, exports safely, clears and rest
         for (const kind of ['sfw', 'nsfw']) assert.equal(r.runtime.settings().engines[kind].diagnosticsEnabled, true);
         message.extra.token_count = 3095;
         const report = r.runtime.diagnostics();
-        assert.equal(report.version, '0.2.17');
+        assert.equal(report.version, '0.2.18');
         assert.ok(report.conflicts.events.some(row => row.stage === 'field_write' && row.data.after.number === 3095));
         assert.doesNotMatch(JSON.stringify(report), /PRIVATE_BODY|PRIVATE_TRANSLATION/);
         r.runtime.clearDiagnostics(); assert.equal(r.runtime.diagnostics().conflicts.events.length, 0);
@@ -454,7 +496,7 @@ test('unified core traces one write into both diagnostics and distinguishes save
         assert.equal(typeof descriptor.set, 'function');
         for (const kind of ['sfw', 'nsfw']) {
             const diag = r.runtime.diagnostics()[kind];
-            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.17');
+            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.18');
             const writes = diag.events.filter(e => e.stage === 'body_write');
             assert.equal(writes.length, 1); assert.equal(writes[0].data.ownWrite, true);
             assert.equal(writes[0].data.sameSceneBody, true);

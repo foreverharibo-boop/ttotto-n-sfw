@@ -250,6 +250,6 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         diagnosticsEnabled, setDiagnosticsEnabled,
         clearDiagnostics: () => { features.sfw.clearDiagnostics(); features.nsfw.clearDiagnostics(); conflicts.clear(); internal.clear(); },
         intercept, chatReady, owner: ownerNow, get active() { return active; },
-        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.2.17', owner: ownerNow(), core: core.diagnostics(), conflicts: conflicts.report(),
+        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.2.18', owner: ownerNow(), core: core.diagnostics(), conflicts: conflicts.report(),
             internal: internal.report(), sfw: JSON.parse(features.sfw.diagnosticReport()), nsfw: JSON.parse(features.nsfw.diagnosticReport()) }) };
 }
