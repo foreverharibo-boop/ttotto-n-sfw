@@ -9,11 +9,42 @@ from nsfw_stage_policy import adapt_stage_policy
 
 
 def adapt(source, kind):
-    # Only complete, known auxiliary reports are non-narrative. An unfinished
-    # foreign tag must not hide the rest of a reply from stale-state checks.
+    # Apply the all-tag comparison after the old report/fence/translation cleanup.
+    # Retain the prior canonicalizer solely for evidence-based snapshot migration.
     marker = 'function canonicalSceneBody(text) {'
     assert source.count(marker) == 1, (kind, 'canonical scene comparison')
-    source = source.replace(marker, marker + '\n    text = stripAuxiliarySceneReports(text);', 1)
+    source = source.replace(marker, 'function previousCanonicalSceneBody(text) {\n    text = stripLegacyAuxiliarySceneReports(text);', 1)
+    body_marker = 'function recordBody(text) {' if kind == 'nsfw' else 'function stateRecordBody(text) {'
+    assert source.count(body_marker) == 1, (kind, 'body wrapper')
+    source = source.replace(body_marker, """function canonicalSceneBody(text) {
+    return stripAuxiliarySceneReports(previousCanonicalSceneBody(text));
+}
+
+function previousMessageStateSignature(message) {
+    const text = previousCanonicalSceneBody(message?.mes);
+    let hash = 2166136261;
+    for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
+    return `${currentSwipeIndex(message)}:${text.length}:${(hash >>> 0).toString(36)}`;
+}
+
+""" + body_marker, 1)
+    pattern = r'function snapshotMatchesMessage\([^\n]*\) \{\n[\s\S]*?\n\}'
+    source, count = re.subn(pattern, lambda _: """function snapshotMatchesMessage(message, snapshot = snapshotForMessage(message)) {
+    if (!snapshot?.state) return false;
+    const signature = messageStateSignature(message);
+    if (snapshot.messageSignature === signature) return true;
+    const previousMatches = snapshot.signatureVersion === 2
+        && snapshot.messageSignature === previousMessageStateSignature(message);
+    const legacyMatches = snapshot.signatureVersion !== 2 && snapshot.signatureVersion !== 3
+        && snapshot.messageSignature === legacyMessageStateSignature(message);
+    if (!previousMatches && !legacyMatches) return false;
+    // Only migrate after the old fingerprint has verified the current reply.
+    snapshot.messageSignature = signature;
+    snapshot.signatureVersion = 3;
+    return true;
+}""", source, count=1)
+    assert count == 1, (kind, 'snapshot migration')
+    source = source.replace('signatureVersion: 2', 'signatureVersion: 3')
     # Missing/unverified reports are not evidence of a stage-one scene. Keep
     # that uncertainty through the UI and prompt instead of feeding 1 back.
     source = source.replace("return { stage: 1, source: 'default' };",
@@ -82,7 +113,7 @@ function slowBurnStageInfo() {''', 1)
     # Unified diagnostics are labelled as the installed extension, not the
     # upstream feature versions. Body writes are observed once by core.js.
     source = source.replace('extension: MODULE_NAME, version: EXTENSION_VERSION, recording:',
-        f"extension: 'ttotto-unified', mode: '{kind}', version: '0.2.14', recording:")
+        f"extension: 'ttotto-unified', mode: '{kind}', version: '0.2.15', recording:")
     source = source.replace('current: diagnosticState(), events: diagnosticRows',
         'bodyWriteNote: DIAGNOSTIC_NOTE, current: diagnosticState(), events: diagnosticRows')
     source = source.replace('function clearDiagnostics() {',

@@ -99,7 +99,7 @@ export function createSceneCore(host, features) {
                 parsed[kind] = feature.parseReport(message);
                 const state = parsed[kind];
                 if (state) messageStore(message, kind).swipes[String(target.swipe)] = {
-                    state, at: Date.now(), messageSignature: feature.messageStateSignature(message), signatureVersion: 2,
+                    state, at: Date.now(), messageSignature: feature.messageStateSignature(message), signatureVersion: 3,
                 };
             }
             // A full scene in the intimate report also supplies the narrative
@@ -107,7 +107,7 @@ export function createSceneCore(host, features) {
             if (enabled('sfw') && !parsed.sfw && parsed.nsfw?.scene) {
                 parsed.sfw = structuredClone(parsed.nsfw.scene);
                 messageStore(message, 'sfw').swipes[String(target.swipe)] = {
-                    state: parsed.sfw, at: Date.now(), messageSignature: features.sfw.messageStateSignature(message), signatureVersion: 2,
+                    state: parsed.sfw, at: Date.now(), messageSignature: features.sfw.messageStateSignature(message), signatureVersion: 3,
                 };
             }
             detect(parsed.nsfw ?? null, message);

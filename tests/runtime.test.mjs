@@ -44,7 +44,7 @@ test('Archive cleanup during recovered-message hooks keeps both records and narr
     } finally { r.runtime.stop(); }
 });
 
-test('both modes ignore complete internal-report changes but retain unknown, malformed and narrative tags', async () => {
+test('both modes ignore every tag name and contents, while retaining outside text and swipe identity', async () => {
     const r = setup(); await r.runtime.start({ withUi: false });
     try {
         for (const kind of ['sfw', 'nsfw']) {
@@ -56,14 +56,81 @@ test('both modes ignore complete internal-report changes but retain unknown, mal
             }
             assert.equal(signature('Before.\nAfter.' + tags(8)), baseline);
             assert.equal(signature('Before.\nAfter.' + tags(1)), baseline);
-            for (const tag of ['Info_panel', 'dialogue', 'details', 'span', 'custom_state']) {
-                assert.notEqual(signature(`Before.<${tag}>Morning</${tag}>After.`), signature(`Before.<${tag}>Night</${tag}>After.`));
+            for (const tag of ['Info_panel', 'dialogue', 'details', 'span', 'custom_state', 'phone-trigger', 'x:state', '기록']) {
+                assert.equal(signature(`Before.<${tag}>Morning</${tag}>After.`), signature(`Before.<${tag}>Night</${tag}>After.`));
+                assert.equal(signature(`Before.<${tag}>Morning</${tag}>After.`), signature('Before.After.'));
             }
-            assert.notEqual(signature('Before.<charm_now>Morning'), signature('Before.<charm_now>Night'));
-            assert.notEqual(signature('Before.<charm_now>Morning</other>'), signature('Before.'));
-            assert.notEqual(signature('Before.<charm_now>Morning<charm_now>data</charm_now>'), signature('Before.'));
+            assert.equal(signature('Before.<unknown>Morning'), signature('Before.<unknown>Night'));
+            assert.equal(signature('Before.<unknown>Morning</other>'), signature('Before.'));
+            assert.equal(signature('Before.<unknown>Morning<unknown>data</unknown>'), signature('Before.'));
+            assert.notEqual(signature('Before.<custom>data</custom>After.'), signature('Before.<custom>data</custom>Changed.'));
             assert.notEqual(signature('Before.\nAfter.'), r.runtime.features[kind].messageStateSignature({ mes: 'Before.\nAfter.', swipe_id: 1 }));
         }
+    } finally { r.runtime.stop(); }
+});
+
+test('foreign tag cleanup preserves records and is logged without scheduling another analysis', async () => {
+    const r = setup({ autoRefine: true }); await r.runtime.start({ withUi: false });
+    try {
+        r.runtime.setDiagnosticsEnabled(true);
+        const message = { mes: 'Reply.\n<phone-trigger action="notify"><data>old</data></phone-trigger>' + tags() };
+        r.context.chat.push(message); r.source.emit('MESSAGE_RECEIVED', 0);
+        assert.match(message.mes, /<phone-trigger/, 'foreign tags stay in the live message');
+        for (const next of ['Reply.\n<phone-trigger action="new">changed</phone-trigger>', 'Reply.']) {
+            message.mes = next;
+            r.source.emit('MESSAGE_EDITED', 0); r.runtime.poll();
+            for (const kind of ['sfw', 'nsfw']) {
+                assert.equal(r.runtime.features[kind].snapshotMatchesMessage(message), true);
+                assert.ok(!r.runtime.diagnostics()[kind].events.some(e => ['refine_scheduled', 'cache_invalidated'].includes(e.stage)));
+            }
+        }
+        const writes = r.runtime.diagnostics().nsfw.events.filter(e => e.stage === 'body_write' && !e.data.ownWrite);
+        assert.equal(writes.length, 2);
+        assert.ok(writes.every(e => e.data.sameSceneBody));
+    } finally { r.runtime.stop(); }
+});
+
+for (const kind of ['sfw', 'nsfw']) test(`${kind}: foreign cleanup during analysis keeps the same target and uses one request`, async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        const message = { mes: 'Reply.<phone-trigger>data</phone-trigger>' + tags(kind === 'sfw' ? 0 : 8) };
+        r.context.chat.push(message); r.source.emit('MESSAGE_RECEIVED', 0);
+        let release, started, calls = 0;
+        const ready = new Promise(resolve => { started = resolve; });
+        r.context.generateRaw = async () => { calls++; started(); return new Promise(resolve => { release = resolve; }); };
+        const work = r.runtime.features[kind].runRefine({ manual: true });
+        await ready;
+        message.mes = 'Reply.';
+        r.source.emit('MESSAGE_EDITED', 0);
+        release(JSON.stringify(kind === 'sfw' ? sfw : { ...nsfw, scene: sfw }));
+        assert.equal(await work, true);
+        assert.equal(calls, 1);
+        assert.equal(message.mes, 'Reply.');
+        assert.equal(r.runtime.features[kind].snapshotMatchesMessage(message), true);
+    } finally { r.runtime.stop(); }
+});
+
+for (const kind of ['sfw', 'nsfw']) test(`${kind}: verified old signatures migrate before foreign tag removal`, async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        const text = 'Reply.\n<Info_panel>Morning</Info_panel>';
+        const message = { mes: text + tags() };
+        r.context.chat.push(message); r.source.emit('MESSAGE_RECEIVED', 0);
+        const feature = r.runtime.features[kind], snapshot = feature.snapshotForMessage(message);
+        let hash = 2166136261;
+        for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
+        snapshot.messageSignature = `0:${text.length}:${(hash >>> 0).toString(36)}`;
+        snapshot.signatureVersion = 2;
+        assert.equal(feature.snapshotMatchesMessage(message), true);
+        assert.equal(snapshot.signatureVersion, 3);
+        message.mes = 'Reply.';
+        assert.equal(feature.snapshotMatchesMessage(message), true);
+        // A stale old record must never be blindly relabelled as current.
+        snapshot.messageSignature = `0:${text.length}:${(hash >>> 0).toString(36)}`;
+        snapshot.signatureVersion = 2;
+        message.mes = 'Different reply.\n<Info_panel>Morning</Info_panel>';
+        assert.equal(feature.snapshotMatchesMessage(message), false);
+        assert.equal(snapshot.signatureVersion, 2);
     } finally { r.runtime.stop(); }
 });
 function setup({ chat = [], autoRefine = false } = {}) {
@@ -136,7 +203,7 @@ test('common diagnostics switch tracks metadata, exports safely, clears and rest
         for (const kind of ['sfw', 'nsfw']) assert.equal(r.runtime.settings().engines[kind].diagnosticsEnabled, true);
         message.extra.token_count = 3095;
         const report = r.runtime.diagnostics();
-        assert.equal(report.version, '0.2.14');
+        assert.equal(report.version, '0.2.15');
         assert.ok(report.conflicts.events.some(row => row.stage === 'field_write' && row.data.after.number === 3095));
         assert.doesNotMatch(JSON.stringify(report), /PRIVATE_BODY|PRIVATE_TRANSLATION/);
         r.runtime.clearDiagnostics(); assert.equal(r.runtime.diagnostics().conflicts.events.length, 0);
@@ -290,7 +357,7 @@ test('unified core traces one write into both diagnostics and distinguishes save
         assert.equal(typeof descriptor.set, 'function');
         for (const kind of ['sfw', 'nsfw']) {
             const diag = r.runtime.diagnostics()[kind];
-            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.14');
+            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.15');
             const writes = diag.events.filter(e => e.stage === 'body_write');
             assert.equal(writes.length, 1); assert.equal(writes[0].data.ownWrite, true);
             assert.equal(writes[0].data.sameSceneBody, true);
