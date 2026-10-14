@@ -24,7 +24,8 @@ function fixture(t) {
         domSnapshot: () => ({ chars: node.textContent.length }),
         domOperation: (operation, before, writeTrace, asyncParents) => events.push({ operation, before, writeTrace, asyncParents }),
         targetFields: () => [], arrayRelevant: () => false,
-        eventOperation: (name, writeTrace, asyncParents) => events.push({ name, writeTrace, asyncParents }),
+        eventOperation: (name, writeTrace, asyncParents, detail) => events.push({ name, writeTrace, asyncParents, detail }),
+        generationOperation: (marker, writeTrace, asyncParents) => events.push({ marker, writeTrace, asyncParents }),
         consoleOperation: () => {},
     });
     t.after(() => {
@@ -35,6 +36,29 @@ function fixture(t) {
     });
     return { hooks, node, other, source, events, state, Node, Element };
 }
+
+test('Generate entry captures an extension caller before await without retaining console text', async t => {
+    const f = fixture(t), original = console.log, passed = [];
+    console.log = function (...args) { passed.push(args); return 19; };
+    t.after(() => { f.hooks.stop(); console.log = original; });
+    f.hooks.start();
+    const generate = vm.runInNewContext('(async function Generate(){ console.log("Generate entered"); await Promise.resolve(); return 23; })',
+        { console }, { filename: 'http://local/script.js' });
+    const result = vm.runInNewContext('generate()', { generate },
+        { filename: 'http://local/scripts/extensions/third-party/initiator/index.js?PRIVATE_KEY' });
+    const row = f.events.find(e => e.marker === 'generate_entered');
+    assert.equal(row.writeTrace[0].script, '/script.js');
+    assert.ok(row.writeTrace.some(frame => frame.script === '/scripts/extensions/third-party/initiator/index.js'));
+    assert.equal(await result, 23);
+    assert.equal(console.log('PRIVATE_DIALOGUE'), 19);
+    console.log('Triggering auto-continue. Message tokens: 100. Target tokens: 1000. Message chunk: PRIVATE_DIALOGUE');
+    assert.equal(f.events.filter(e => e.marker).length, 2);
+    assert.doesNotMatch(JSON.stringify(f.events), /PRIVATE|Message chunk|1000/);
+    assert.ok(passed.some(args => args[0] === 'PRIVATE_DIALOGUE'), 'original console call must remain unchanged');
+    f.hooks.stop();
+    console.log('Generate entered');
+    assert.equal(f.events.filter(e => e.marker).length, 2);
+});
 
 test('DOM setter keeps direct renderer and upstream extension frames, without raw text', t => {
     const f = fixture(t); f.hooks.start();

@@ -3,6 +3,54 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { createConflictDiagnostics } from '../conflict-diagnostics.js';
 
+test('generation evidence keeps caller, safe type flags and body writes despite UI log pressure', async t => {
+    const f = setup(t), original = console.log;
+    console.log = () => {};
+    t.after(() => { f.tracker.stop(); console.log = original; });
+    f.raw.eventTypes = { GENERATION_STARTED: 'started' };
+    f.raw.eventSource = { emit() { return 27; } };
+    f.tracker.sync();
+    const generate = vm.runInNewContext('(async function(){console.log("Generate entered");await Promise.resolve();return source.emit("started","continue",{automatic_trigger:false,quietToLoud:false,quiet_prompt:"PRIVATE_PROMPT"},false)})',
+        { console, source: f.raw.eventSource }, { filename: 'http://local/script.js' });
+    const task = vm.runInNewContext('generate()', { generate }, { filename: 'http://local/scripts/extensions/third-party/caller/index.js?PRIVATE' });
+    assert.equal(await task, 27);
+    f.tracker.bodyEvent('body_write', f.raw.chat[0], { beforeChars: 5, afterChars: 10, ownWrite: false });
+    for (let i = 0; i < 1000; i++) f.tracker.event('CHARACTER_MESSAGE_RENDERED');
+    const trace = f.tracker.report().generationTrace;
+    assert.equal(trace.events.length, 3);
+    assert.ok(trace.events[0].data.writeTrace.some(frame => frame.script?.includes('/caller/')));
+    assert.equal(trace.events[0].data.nativeEntryLocated, true);
+    assert.equal(trace.events[1].data.generationType, 'continue');
+    assert.equal(trace.events[1].data.automatic_trigger, false);
+    assert.equal(trace.events[1].data.dryRun, false);
+    assert.equal(trace.events[2].stage, 'body_write');
+    assert.doesNotMatch(JSON.stringify(trace), /PRIVATE|quiet_prompt/);
+    f.tracker.clear();
+    assert.equal(f.tracker.report().generationTrace.events.length, 0);
+});
+
+test('generation details avoid getters and unknown values, remain bounded and stop when disabled', t => {
+    const f = setup(t), original = console.log;
+    console.log = () => {};
+    t.after(() => { f.tracker.stop(); console.log = original; });
+    f.raw.eventTypes = { GENERATION_STARTED: 'started' };
+    f.raw.eventSource = { emit() {} };
+    f.tracker.sync();
+    const options = {};
+    Object.defineProperty(options, 'quietToLoud', { get() { throw Error('getter must not run'); } });
+    f.raw.eventSource.emit('started', 'PRIVATE_UNKNOWN_TYPE', options, false);
+    const detail = f.tracker.report().generationTrace.events[0].data;
+    assert.equal(detail.generationType, 'unknown');
+    assert.ok(!('quietToLoud' in detail));
+    for (let i = 0; i < 180; i++) console.log('Generate entered');
+    const trace = f.tracker.report().generationTrace;
+    assert.equal(trace.events.length, 160);
+    assert.equal(trace.dropped, 21);
+    f.state.enabled = false;
+    console.log('Generate entered');
+    assert.equal(f.tracker.report().generationTrace.dropped, 21);
+});
+
 function setup(t, { enabled = true } = {}) {
     const previous = Object.fromEntries(['document', 'location', 'MutationObserver', 'addEventListener', 'removeEventListener'].map(k => [k, globalThis[k]]));
     const raw = { chat: [{ mes: 'PRIVATE_DIALOGUE', send_date: '2026-10-14T03:12:00+09:00', gen_started: '2026-10-14T03:11:07.200+09:00', gen_finished: '2026-10-14T03:12:00+09:00', swipe_id: 0, extra: { token_count: 1908, display_text: 'PRIVATE_TRANSLATION' } }], chatMetadata: {}, chatId: 'PRIVATE_CHAT' };

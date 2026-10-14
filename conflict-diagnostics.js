@@ -10,6 +10,8 @@ const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 export function createConflictDiagnostics(host) {
     const rows = [], slots = new Map(), identities = new WeakMap(), textIds = new Map();
+    const generationRows = [];
+    let generationDropped = 0, generationSequence = 0;
     let nextIdentity = 1, nextTextId = 1, current = null, metadata = null, chatId = null, index = -1, watchedChat = null;
     let lastData = null, lastDom = null, started = false, writing = false, observer = null, root = null;
     let dropped = 0, bucket = 0, inBucket = 0, sequence = 0;
@@ -42,9 +44,25 @@ export function createConflictDiagnostics(host) {
                 fields, writeTrace, asyncParents, writerLocated: writeTrace[0]?.source === 'client_script' });
             sync();
         },
-        eventOperation: (name, writeTrace, asyncParents) => record('event_dispatch', { name, writeTrace, asyncParents }),
+        eventOperation: (name, writeTrace, asyncParents, detail) => {
+            record('event_dispatch', { name, writeTrace, asyncParents, ...detail });
+            if (['GENERATION_STARTED', 'GENERATION_ENDED', 'GENERATION_STOPPED', 'MESSAGE_RECEIVED'].includes(name)) {
+                recordGeneration('event_dispatch', { name, writeTrace, asyncParents, ...detail });
+            }
+        },
+        generationOperation: (marker, writeTrace, asyncParents) => {
+            const data = { marker, writeTrace, asyncParents,
+                nativeEntryLocated: writeTrace[0]?.script === '/script.js' };
+            record('generation_entry', data);
+            recordGeneration('generation_entry', data);
+        },
         consoleOperation: (kind, writeTrace, asyncParents, errorTrace) => record('console_report', { kind, writeTrace, asyncParents, errorTrace }),
     });
+    function recordGeneration(stage, data) {
+        if (!live()) return;
+        generationRows.push({ seq: ++generationSequence, at: Date.now(), stage, message: index, objectId: id(current), data });
+        if (generationRows.length > 160) { generationRows.shift(); generationDropped++; }
+    }
     const id = value => {
         if (!value || typeof value !== 'object') return 0;
         if (!identities.has(value)) identities.set(value, nextIdentity++);
@@ -253,7 +271,7 @@ export function createConflictDiagnostics(host) {
             record('host_event', { name }); sampleData(); sampleDom();
         }
     }
-    function clear() { rows.length = 0; dropped = 0; sequence = 0; bucket = inBucket = 0; textIds.clear(); nextTextId = 1; lastData = lastDom = null; }
+    function clear() { rows.length = 0; generationRows.length = 0; generationDropped = generationSequence = 0; dropped = 0; sequence = 0; bucket = inBucket = 0; textIds.clear(); nextTextId = 1; lastData = lastDom = null; }
     function report() {
         const loadedScripts = [];
         if (live()) for (const script of Array.from(globalThis.document?.scripts ?? [])) {
@@ -271,10 +289,15 @@ export function createConflictDiagnostics(host) {
             observedWriters[path] = (observedWriters[path] ?? 0) + 1;
         }
         return { recording: live(), note: CONFLICT_NOTE, limit: 500, dropped, observedWriters, hooks: hooks.status(),
-            loadedScripts: [...new Set(loadedScripts)], events: structuredClone(rows) };
+            loadedScripts: [...new Set(loadedScripts)], events: structuredClone(rows),
+            generationTrace: { limit: 160, dropped: generationDropped, events: structuredClone(generationRows),
+                note: 'Fixed Generate-entry markers capture the synchronous caller before the native await. Event rows include type and safe flags. Entries and later events are not assumed to be paired across overlapping requests. Marker availability depends on the host version and console hooks; inspect hooks.status. No prompts or console text are retained.' } };
     }
     function bodyEvent(stage, message, data) {
-        if (stage === 'body_write' && message === current && belongs()) record(stage, data);
+        if (stage === 'body_write' && message === current && belongs()) {
+            record(stage, data);
+            recordGeneration(stage, data);
+        }
     }
     return { sync, event, stop, clear, report, bodyEvent };
 }

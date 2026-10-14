@@ -583,7 +583,7 @@ function diagnosticState() {
         refineRunning, pendingGenerations: generationEvents.length };
 }
 function diagnosticReport() {
-    return JSON.stringify({ extension: 'ttotto-unified', mode: 'nsfw', version: '0.2.16', recording: diagnosticsEnabled(),
+    return JSON.stringify({ extension: 'ttotto-unified', mode: 'nsfw', version: '0.2.17', recording: diagnosticsEnabled(),
         note: 'Memory-only; no API keys or dialogue contents. request_observed means the fetch boundary, not proof of model receipt. server_response_observed describes a bounded response copy at the fetch boundary, not guaranteed provider-original output if another wrapper precedes this one. Response/message links require matching bodies; unmatched or ambiguous results are unconfirmed. No raw bodies are exported.',
         bodyWriteNote: DIAGNOSTIC_NOTE, current: diagnosticState(), events: diagnosticRows }, null, 2);
 }

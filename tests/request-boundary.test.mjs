@@ -23,6 +23,13 @@ function sourceFiles() {
         return [file, bytes.toString()];
     }));
 }
+test('native generation marker precedes first await and native auto-continue has a distinct marker', { skip: !dir }, () => {
+    const source = sourceFiles()['script.js'];
+    const generate = declaration(source, 'Generate');
+    const marker = generate.indexOf("console.log('Generate entered')");
+    assert.ok(marker >= 0 && marker < generate.indexOf('await '));
+    assert.match(declaration(source, 'shouldAutoContinue'), /Triggering auto-continue\. Message tokens:/);
+});
 function declaration(text, name) {
     const match = new RegExp(`^(?:export )?(?:async )?function ${name}\\(`, 'm').exec(text);
     assert.ok(match, name);

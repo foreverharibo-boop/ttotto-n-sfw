@@ -7,8 +7,9 @@ import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const html = '<div id="chat"><div class="mes" mesid="0" swipeid="0"><span class="mes_timer">52.8s</span><span class="tokenCounterDisplay">1908t</span><span class="timestamp">PRIVATE_TIME</span><div class="mes_text">PRIVATE_BODY</div></div></div><script src="/script.js"></script><script src="/scripts/extensions/third-party/probe/index.js"></script>';
-const core = 'globalThis.renderReply=value=>{document.querySelector(".tokenCounterDisplay").textContent=value};';
+const core = 'globalThis.renderReply=value=>{document.querySelector(".tokenCounterDisplay").textContent=value};globalThis.Generate=async()=>{console.log("Generate entered");await Promise.resolve();return 17};';
 const probe = `globalThis.probe={
+    generate(){return Generate()},
     direct(){document.querySelector('.mes_timer').textContent='95.5s'},
     indirect(){renderReply('3095t')},
     later(){return new Promise(resolve=>setTimeout(()=>{renderReply('4000t');resolve()},0))},
@@ -52,6 +53,7 @@ test('real browser reply replacement, DOM calls, async origin and cleanup', asyn
         tracker.sync();
     });
     await page.evaluate(async () => { probe.direct(); probe.indirect(); await probe.later(); probe.markup(); probe.replace(); probe.error(); });
+    assert.equal(await page.evaluate(() => probe.generate()), 17);
     const report = await page.evaluate(() => tracker.report());
     const dom = report.events.filter(row => row.stage === 'dom_write');
     assert.ok(dom.some(row => row.data.writeTrace[0]?.script === '/scripts/extensions/third-party/probe/index.js'));
@@ -63,6 +65,8 @@ test('real browser reply replacement, DOM calls, async origin and cleanup', asyn
     assert.ok(report.events.some(row => row.stage === 'message_slot_write' && row.data.writerLocated));
     assert.ok(report.events.some(row => row.stage === 'field_write' && row.data.after.number === 6000));
     assert.ok(report.events.some(row => row.stage === 'console_report' && row.data.errorTrace.length));
+    assert.ok(report.generationTrace.events.some(row => row.stage === 'generation_entry'
+        && row.data.nativeEntryLocated && row.data.writeTrace.some(frame => frame.script === '/scripts/extensions/third-party/probe/index.js')));
     assert.doesNotMatch(JSON.stringify(report), /PRIVATE|127\.0\.0\.1|http:/);
     assert.equal(await page.evaluate(() => {
         tracker.stop();

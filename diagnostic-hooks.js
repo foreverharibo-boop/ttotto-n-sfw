@@ -129,7 +129,18 @@ export function createDiagnosticHooks(host) {
                 const name = enabled() && Object.keys(types).find(name => types[name] === args[0] && /^[A-Z][A-Z_]{0,63}$/.test(name));
                 if (!name) return apply(original, this, args);
                 const trace = diagnosticWriteTrace(new Error().stack);
-                attempt(() => host.eventOperation(name, trace, parents));
+                const detail = {};
+                if (name === 'GENERATION_STARTED') {
+                    detail.generationType = [undefined, 'normal', 'regenerate', 'swipe', 'continue', 'quiet', 'impersonate'].includes(args[1])
+                        ? args[1] ?? 'normal' : 'unknown';
+                    detail.dryRun = args[3] === true;
+                    // Read only plain data properties; never invoke foreign getters.
+                    for (const field of ['automatic_trigger', 'quietToLoud']) {
+                        const value = attempt(() => descriptor(args[2] ?? {}, field));
+                        if (value && typeof value.value === 'boolean') detail[field] = value.value;
+                    }
+                }
+                attempt(() => host.eventOperation(name, trace, parents, detail));
                 return within(cause(`event:${name}`, trace), original, this, args);
             });
             if (!own) {
@@ -139,6 +150,21 @@ export function createDiagnosticHooks(host) {
         }
     }
     function installConsole() {
+        // ST logs this fixed marker at Generate entry, BEFORE its first await.
+        // Capturing there preserves the initiating extension's synchronous stack.
+        // Do not retain arbitrary console arguments (auto-continue logs include text).
+        patch(globalThis.console, 'log', 'console.log:generation-entry', (original, enabled) => function (...args) {
+            const marker = args[0] === 'Generate entered' ? 'generate_entered'
+                : typeof args[0] === 'string' && args[0].startsWith('Triggering auto-continue. Message tokens:')
+                    ? 'native_auto_continue' : null;
+            if (marker && !busy && enabled()) {
+                const trace = diagnosticWriteTrace(new Error().stack);
+                busy = true;
+                attempt(() => host.generationOperation(marker, trace, parents));
+                busy = false;
+            }
+            return apply(original, this, args);
+        });
         for (const key of ['error', 'warn']) patch(globalThis.console, key, `console.${key}`, (original, enabled) => function (...args) {
             if (!busy && enabled()) {
                 const trace = diagnosticWriteTrace(new Error().stack);
