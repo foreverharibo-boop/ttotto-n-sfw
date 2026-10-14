@@ -1,9 +1,10 @@
 @import url('./modes/sfw/style.css');
 @import url('./modes/nsfw/style.css');
 
-#ttu-overlay[hidden], #ttu-overlay:not([open]), #ttu-body [hidden] { display: none !important; }
+#ttu-overlay[hidden], #ttu-overlay:not([open]), #ttu-overlay #ttu-body [hidden] { display: none !important; }
 /* The modal top layer escapes transformed chat/body containing blocks. */
 #ttu-overlay {
+    --ttu-layout-version: 1;
     position: fixed !important; inset: auto !important;
     top: var(--ttu-viewport-top, 0px) !important;
     left: var(--ttu-viewport-left, 0px) !important;
@@ -13,10 +14,47 @@
     margin: 0 !important; border: 0 !important;
     padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
     box-sizing: border-box; transform: none !important;
-    display: flex; align-items: center; justify-content: center;
+    display: flex !important; align-items: center; justify-content: center;
     overflow: hidden; background: transparent; box-shadow: none;
     color: var(--SmartThemeBodyColor, #ededf2); font-family: inherit; font-size: inherit;
 }
+
+/* Protect geometry only inside this popup. Keep theme colors, fonts and decoration. */
+#ttu-overlay .ttu-dialog {
+    display: flex !important; flex-direction: column !important;
+    width: 100% !important; min-width: 0 !important; max-width: 760px !important;
+}
+#ttu-overlay .ttu-header,
+#ttu-overlay .ttu-tabs,
+#ttu-overlay .ttu-options,
+#ttu-overlay .tsf-tabs,
+#ttu-overlay .tns-tabs,
+#ttu-overlay .tsf-button-row,
+#ttu-overlay .tns-button-row,
+#ttu-overlay .tsf-section-head,
+#ttu-overlay .tns-section-head {
+    display: flex !important; flex-direction: row !important;
+    flex-wrap: wrap !important; min-width: 0 !important;
+    width: auto !important; max-width: 100% !important;
+}
+#ttu-overlay .ttu-header { flex-wrap: nowrap !important; }
+#ttu-overlay .ttu-header > div { flex: 1 1 auto; }
+#ttu-overlay .ttu-status { display: block !important; }
+#ttu-overlay .menu_button {
+    box-sizing: border-box !important;
+    display: inline-flex !important; align-items: center; justify-content: center;
+    width: auto !important; min-width: 0 !important; max-width: 100% !important;
+    height: auto !important; flex-shrink: 0 !important;
+    writing-mode: horizontal-tb !important; text-orientation: mixed !important;
+    white-space: normal !important; word-break: keep-all !important;
+    overflow-wrap: break-word !important;
+}
+#ttu-overlay .ttu-tabs .menu_button,
+#ttu-overlay .tsf-tabs .menu_button,
+#ttu-overlay .tns-tabs .menu_button {
+    flex: 1 0 auto !important; white-space: nowrap !important;
+}
+#ttu-overlay .ttu-header .menu_button { flex: 0 0 auto !important; min-width: 32px !important; }
 #ttu-overlay::backdrop { background: rgb(0 0 0 / 45%); }
 #ttu-overlay .ttu-dialog {
     position: relative; inset: auto; transform: none;

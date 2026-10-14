@@ -1,12 +1,13 @@
 {
   "name": "ttotto-unified",
-  "version": "0.2.18",
+  "version": "0.2.19",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "python3 scripts/build.py",
     "test": "node --test tests/*.test.mjs",
     "test:browser": "node --test tests/browser-diagnostics.mjs",
-    "test:legacy": "node scripts/test-legacy.mjs"
+    "test:legacy": "node scripts/test-legacy.mjs",
+    "test:layout": "node --test tests/browser-layout.mjs"
   }
 }

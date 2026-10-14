@@ -244,12 +244,27 @@ export function createUi(getRuntime) {
     function open(kind) {
         const owner = getRuntime().owner();
         selected = ['sfw', 'nsfw'].includes(kind) ? kind : owner === 'nsfw' ? 'nsfw' : 'sfw'; build(); lastFocus = document.activeElement; overlay.hidden = false;
+        ensureLayoutStyle();
         syncViewport();
         if (!overlay.open) overlay.showModal();
         window.visualViewport?.addEventListener('resize', syncViewport);
         window.visualViewport?.addEventListener('scroll', syncViewport);
         window.addEventListener('resize', syncViewport);
         refresh(); overlay.querySelector('button')?.focus({ preventScroll: true });
+    }
+    function ensureLayoutStyle() {
+        // Some hosts/themes omit the extension stylesheet. Use an absolute module-relative
+        // URL, including its nested imports, and retry on the next open after a load error.
+        if (getComputedStyle(overlay).getPropertyValue('--ttu-layout-version').trim() === '1'
+            || document.getElementById('ttu-layout-fallback')) return;
+        const link = document.createElement('link');
+        link.id = 'ttu-layout-fallback'; link.rel = 'stylesheet';
+        link.href = new URL('./style.css?ttu-layout=1', import.meta.url).href;
+        link.addEventListener('error', () => {
+            link.remove();
+            console.warn('[또또(N)SFW] 화면 스타일을 불러오지 못했어요. 다음에 메뉴를 열 때 다시 시도합니다.');
+        }, { once: true });
+        document.head.append(link);
     }
     function syncViewport() {
         const viewport = window.visualViewport;
