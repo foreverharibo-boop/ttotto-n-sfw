@@ -342,7 +342,7 @@ test('common diagnostics switch tracks metadata, exports safely, clears and rest
         for (const kind of ['sfw', 'nsfw']) assert.equal(r.runtime.settings().engines[kind].diagnosticsEnabled, true);
         message.extra.token_count = 3095;
         const report = r.runtime.diagnostics();
-        assert.equal(report.version, '0.2.19');
+        assert.equal(report.version, '0.2.20');
         assert.ok(report.conflicts.events.some(row => row.stage === 'field_write' && row.data.after.number === 3095));
         assert.doesNotMatch(JSON.stringify(report), /PRIVATE_BODY|PRIVATE_TRANSLATION/);
         r.runtime.clearDiagnostics(); assert.equal(r.runtime.diagnostics().conflicts.events.length, 0);
@@ -496,7 +496,7 @@ test('unified core traces one write into both diagnostics and distinguishes save
         assert.equal(typeof descriptor.set, 'function');
         for (const kind of ['sfw', 'nsfw']) {
             const diag = r.runtime.diagnostics()[kind];
-            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.19');
+            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.20');
             const writes = diag.events.filter(e => e.stage === 'body_write');
             assert.equal(writes.length, 1); assert.equal(writes[0].data.ownWrite, true);
             assert.equal(writes[0].data.sameSceneBody, true);
@@ -1357,5 +1357,26 @@ test('settled, invalidated and chat-change diagnostics reflect collection withou
         r.source.emit('CHAT_CHANGED');
         for (const kind of ['sfw', 'nsfw']) assert.ok(r.runtime.diagnostics()[kind].events.some(e => e.stage === 'chat_changed'));
         assert.equal(r.prompts[PROMPT_KEY], '');
+    } finally { r.runtime.stop(); }
+});
+
+for (const kind of ['sfw', 'nsfw']) test(`${kind}: owned report cleanup recounts visible body and preserves translation`, async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        const counted = [];
+        r.context.powerUserSettings = { message_token_count_enabled: true };
+        r.context.getTokenCountAsync = async (text, padding) => { counted.push([text, padding]); return 23; };
+        const body = 'A opens the window. <foreign>Other extension data</foreign>';
+        const report = kind === 'sfw' ? `<sfw_scene>${JSON.stringify(sfw)}</sfw_scene>` : `<scene_state>${JSON.stringify(nsfw)}</scene_state>`;
+        const message = { mes: body + report, swipe_id: 0, swipes: [body + report],
+            swipe_info: [{ extra: { token_count: 9000, untouched: true } }], extra: { token_count: 9000, display_text: '기존 번역' } };
+        r.context.chat.push(message); r.source.emit('MESSAGE_RECEIVED', 0);
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(message.mes, body); assert.equal(message.swipes[0], body);
+        assert.deepEqual(counted, [[body, 0]]);
+        assert.equal(message.extra.token_count, 23); assert.equal(message.swipe_info[0].extra.token_count, 23);
+        assert.equal(message.swipe_info[0].extra.untouched, true); assert.equal(message.extra.display_text, '기존 번역');
+        r.source.emit('CHARACTER_MESSAGE_RENDERED', 0); r.source.emit('GENERATION_ENDED', 'normal');
+        await new Promise(resolve => setImmediate(resolve)); assert.equal(counted.length, 1);
     } finally { r.runtime.stop(); }
 });

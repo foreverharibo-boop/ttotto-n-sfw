@@ -2,6 +2,7 @@
 // they cannot subscribe, collect independently, negotiate ownership or inject.
 import { createBodyDiagnostics } from './diagnostics.js';
 import { stripAuxiliarySceneReports } from './scene-body.js';
+import { createBodyTokenCounter } from './body-tokens.js';
 export const SCENE_STORE_KEY = 'ttottoUnifiedScene';
 const MODES = ['sfw', 'nsfw'];
 const GENERATION_TYPES = new Set(['normal', 'swipe', 'regenerate', 'continue']);
@@ -15,6 +16,12 @@ export function createSceneCore(host, features) {
     const enabled = kind => features[kind].isSupervising();
     const currentMessage = () => host.raw().chat?.filter(m => m && !m.is_user && !m.is_system).at(-1);
     const blocking = () => events.some(type => GENERATION_TYPES.has(type));
+    const bodyTokens = createBodyTokenCounter({ raw: host.raw, ready: host.ready,
+        allowed: () => !blocking(), epoch: () => mainGenerationEpoch,
+        swipe: message => features.sfw.currentSwipeIndex(message), save: () => features.sfw.persistChat(),
+        record: (stage, data) => {
+            for (const kind of MODES) if (features[kind].getSettings().diagnosticsEnabled) features[kind].diagnosticRecord(stage, data);
+        } });
     const bodyDiagnostics = createBodyDiagnostics({ raw: host.raw, ready: host.ready,
         enabled: () => MODES.some(kind => features[kind].getSettings().diagnosticsEnabled),
         swipe: message => features.sfw.currentSwipeIndex(message),
@@ -136,6 +143,7 @@ export function createSceneCore(host, features) {
             lastObserved = { ...target, text: String(message.mes ?? '') };
             if (changed) features.sfw.rerenderMessage(host.raw().chat.indexOf(message), message);
             if (changed || Object.values(parsed).some(Boolean)) features.sfw.persistChat();
+            if (changed) bodyTokens.cleaned(message);
             host.changed();
             return true;
         } finally { collecting = false; }
@@ -143,6 +151,7 @@ export function createSceneCore(host, features) {
     function syncGeneration() { for (const feature of Object.values(features)) feature.syncGeneration(events); }
     function reset() {
         mainGenerationEpoch++;
+        bodyTokens.reset();
         bodyDiagnostics.reset();
         events = []; rewriteMode = null; windDown = null; lastObserved = null;
         mode = 'waiting'; phase = 'tracking';
@@ -290,6 +299,9 @@ export function createSceneCore(host, features) {
         } else if (['CHARACTER_MESSAGE_RENDERED', 'MESSAGE_SWIPED', 'MESSAGE_EDITED', 'MESSAGE_DELETED', 'CHAT_CREATED'].includes(name)) {
             if (name === 'MESSAGE_DELETED') lastObserved = null;
             collect(args[0]); detect(null, null);
+        }
+        if (['MESSAGE_RECEIVED', 'CHARACTER_MESSAGE_RENDERED', 'GENERATION_ENDED', 'GENERATION_STOPPED', 'MESSAGE_SWIPED', 'MESSAGE_EDITED'].includes(name)) {
+            bodyTokens.refresh(host.raw().chat?.[Number(args[0])] ?? currentMessage());
         }
         host.changed();
     }
