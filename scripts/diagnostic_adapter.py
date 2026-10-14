@@ -6,9 +6,9 @@ NAMES = ('runRefine', 'requestRefine', 'parseRefineResponse', 'persistChat',
          'initializeUi', 'onEnable', 'onDisable', 'onClean')
 REASONS = {
     'sfw': ['mode_or_generation_guard', 'chat_not_ready', 'disabled_or_busy', 'automatic_off', 'main_generation_pending',
-            'other_mode', 'no_assistant', 'target_pending', 'cancelled_or_disabled', 'target_changed', 'record_changed', 'saved', 'aborted', 'failed'],
+            'other_mode', 'no_assistant', 'target_pending', 'main_generation_changed', 'cancelled_or_disabled', 'target_changed', 'record_changed', 'saved', 'aborted', 'failed'],
     'nsfw': ['mode_or_generation_guard', 'chat_not_ready', 'disabled', 'automatic_not_needed', 'main_generation_pending',
-             'busy', 'adult_unconfirmed', 'no_assistant', 'target_pending', 'same_automatic_target', 'target_changed_or_disabled', 'record_changed', 'saved', 'aborted', 'failed'],
+             'busy', 'adult_unconfirmed', 'no_assistant', 'target_pending', 'same_automatic_target', 'main_generation_changed', 'target_changed_or_disabled', 'record_changed', 'saved', 'aborted', 'failed'],
 }
 
 def instrument(source, kind):

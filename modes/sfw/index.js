@@ -673,7 +673,7 @@ function diagnosticState() {
         refineRunning, pendingGenerations: generationEvents.length };
 }
 function diagnosticReport() {
-    return JSON.stringify({ extension: 'ttotto-unified', mode: 'sfw', version: '0.2.15', recording: diagnosticsEnabled(),
+    return JSON.stringify({ extension: 'ttotto-unified', mode: 'sfw', version: '0.2.16', recording: diagnosticsEnabled(),
         note: 'Memory-only; no API keys or dialogue contents. request_observed means the fetch boundary, not proof of model receipt. server_response_observed describes a bounded response copy at the fetch boundary, not guaranteed provider-original output if another wrapper precedes this one. Response/message links require matching bodies; unmatched or ambiguous results are unconfirmed. No raw bodies are exported.',
         bodyWriteNote: DIAGNOSTIC_NOTE, current: diagnosticState(), events: diagnosticRows }, null, 2);
 }
@@ -2672,6 +2672,7 @@ async function runRefine({ manual = false } = {}) {
     queuedRefineTarget = null;
     refineRunning = true;
     activeRefineTarget = target;
+    const refineEpoch = unifiedHost?.refinementEpoch();
     const recordUnchanged = captureRecordGuard(target.message);
     diagnosticRecord('refine_started', { manual, message: target.index, swipe: target.swipeIndex });
 
@@ -2684,19 +2685,23 @@ async function runRefine({ manual = false } = {}) {
     try {
         unifiedHost?.diagnosticBind?.(controller.signal, __diagOperation);
         const response = await awaitRefineResponse(controller.signal);
+        if (unifiedHost && (unifiedHost.refinementEpoch() !== refineEpoch || !unifiedHost.canRefine('sfw', manual))) {
+            diagnosticRecord('refine_discarded', { reason: 'main_generation_changed' });
+            { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 9, reason: 'main_generation_changed', accepted: false }); return false; }
+        }
         if (controller.signal.aborted || !runtimeActive || !getSettings().enabled
-            || !getChatMeta(false)?.enabled || syncNsfwSuspension()) { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 9, reason: 'cancelled_or_disabled', accepted: false }); return false; }
+            || !getChatMeta(false)?.enabled || syncNsfwSuspension()) { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 10, reason: 'cancelled_or_disabled', accepted: false }); return false; }
         const state = parseRefineResponse(response, __diagOperation);
         const currentTarget = latestAssistantTarget();
         if (!sameRefineTarget(currentTarget, target)) {
 
             queuedRefineTarget = currentTarget;
             console.debug(`${LOG_PREFIX} 보정 중 최신 답변이 바뀌어 이전 분석 결과를 폐기합니다.`);
-            { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 10, reason: 'target_changed', accepted: false }); return false; }
+            { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 11, reason: 'target_changed', accepted: false }); return false; }
         }
         if (!recordUnchanged()) {
             diagnosticRecord('refine_discarded', { reason: 'record_changed' });
-            { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 11, reason: 'record_changed', accepted: false }); return false; }
+            { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 12, reason: 'record_changed', accepted: false }); return false; }
         }
         diagnosticRecord('refine_parsed', { characters: Object.keys(state.characters ?? {}).length, missing: stateCompletenessIssues(state) });
         // 응답에 명시된 정보 패널은 모델의 보정 추론보다 우선한다.
@@ -2725,20 +2730,20 @@ async function runRefine({ manual = false } = {}) {
 
         saveChatMeta(__diagOperation);
         if (manual) toastr.success('보조 AI가 장면 상태를 다시 잡았어요.', '🫧또또SFW');
-        { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 12, reason: 'saved', accepted: true }); return true; }
+        { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 13, reason: 'saved', accepted: true }); return true; }
     } catch (error) {
         unifiedHost?.diagnosticCaught?.(__diagOperation, error);
         if (error?.name === 'AbortError') {
 
             if (sameRefineTarget(lastAutoRefineTarget, target)) lastAutoRefineTarget = null;
-            { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 13, reason: 'aborted', accepted: false }); return false; }
+            { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 14, reason: 'aborted', accepted: false }); return false; }
         }
         diagnosticRecord('refine_failed', { message: target.index, aborted: error?.name === 'AbortError' });
         refineFailure = { metadata: getContext().chatMetadata, target };
         console.error(`${LOG_PREFIX} 보정 분석 실패`, error);
 
         if (manual) toastr.error(`보정 분석 실패: ${error?.message ?? error}`, '🫧또또SFW');
-        { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 14, reason: 'failed', accepted: false }); return false; }
+        { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 15, reason: 'failed', accepted: false }); return false; }
     } finally {
         refineRunning = false;
         refineAbortController = null;
@@ -4193,6 +4198,12 @@ function resetFeatureSession() {
     diagnosticBodies.clear();
     populateProfiles();
 }
+function pauseRefineForGeneration() {
+    if (refineRunning || refineTimer) diagnosticRecord('refine_interrupted', { reason: 'main_generation_started' });
+    clearTimeout(refineTimer); refineTimer = null;
+    queuedRefineTarget = null; lastAutoRefineTarget = null;
+    refineAbortController?.abort();
+}
 function leaveMode() {
     clearTimeout(refineTimer); refineTimer = null; queuedRefineTarget = null;
     refineAbortController?.abort();
@@ -4220,7 +4231,7 @@ function summary() {
         armed: isFullyArmed(), supervising: isSupervising(), diagnostics: diagnosticState() };
 }
 return { diagnosticRuntimeState,
-    isSupervising, settleReport, resetFeatureSession, leaveMode, buildInjection, currentState: effectiveState,
+    isSupervising, settleReport, resetFeatureSession, pauseRefineForGeneration, leaveMode, buildInjection, currentState: effectiveState,
     syncGeneration: events => { generationEvents = [...events]; },
     startSlowBurn: () => { if (getSettings().slowBurnEnabled && isFullyArmed()) startSlowBurnSessionIfNeeded(); },
     exitPrompt: () => BRIDGE_LINES.join('\n'),

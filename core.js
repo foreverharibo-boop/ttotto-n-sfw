@@ -11,6 +11,7 @@ export function createSceneCore(host, features) {
     let mode = 'waiting', phase = 'tracking', collecting = false, classifying = false;
     let events = [], rewriteMode = null, windDown = null, chatIdentity = null;
     let lastObserved = null;
+    let mainGenerationEpoch = 0;
     const enabled = kind => features[kind].isSupervising();
     const currentMessage = () => host.raw().chat?.filter(m => m && !m.is_user && !m.is_system).at(-1);
     const blocking = () => events.some(type => GENERATION_TYPES.has(type));
@@ -141,6 +142,7 @@ export function createSceneCore(host, features) {
     }
     function syncGeneration() { for (const feature of Object.values(features)) feature.syncGeneration(events); }
     function reset() {
+        mainGenerationEpoch++;
         bodyDiagnostics.reset();
         events = []; rewriteMode = null; windDown = null; lastObserved = null;
         mode = 'waiting'; phase = 'tracking';
@@ -269,6 +271,9 @@ export function createSceneCore(host, features) {
             if (type !== 'quiet' && GENERATION_TYPES.has(type)) {
                 if (!blocking()) { collect(); detect(null, null); }
                 if (type === 'swipe' || type === 'regenerate') rewriteMode = selection().mode;
+                mainGenerationEpoch++;
+                lastObserved = null;
+                for (const feature of Object.values(features)) feature.pauseRefineForGeneration();
             }
             events.push(type); syncGeneration();
             prepare(type, false);
@@ -293,6 +298,7 @@ export function createSceneCore(host, features) {
         owner: () => selection().mode,
         diagnostics: () => ({ mode: selection().mode, phase: selection().phase, pendingGenerations: events.length, rewriteMode }),
         syncBodyDiagnostics, resetBodyDiagnostics: bodyDiagnostics.reset,
+        refinementEpoch: () => mainGenerationEpoch,
         canRefine: (kind, manual = false) => host.ready() && !blocking() && (isMode(kind) || kind === 'nsfw' && enabled('nsfw') && (manual || features.nsfw.getSettings().armMode === 'auto')),
     };
 }

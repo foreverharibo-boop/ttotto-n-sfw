@@ -145,6 +145,103 @@ function setup({ chat = [], autoRefine = false } = {}) {
     return { runtime, context, source, prompts, toasts, writes };
 }
 
+for (const kind of ['sfw', 'nsfw']) test(`${kind}: a continuation cancels in-flight repair even before the body changes`, async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        const message = { mes: 'Current reply.' + tags(kind === 'sfw' ? 0 : 8) };
+        r.context.chat.push(message); r.source.emit('MESSAGE_RECEIVED', 0);
+        r.runtime.setDiagnosticsEnabled(true);
+        let release, started, calls = 0;
+        const ready = new Promise(resolve => { started = resolve; });
+        r.context.generateRaw = async () => { calls++; started(); return new Promise(resolve => { release = resolve; }); };
+        const feature = r.runtime.features[kind];
+        const before = JSON.stringify(message.extra.ttottoUnifiedScene);
+        const work = feature.runRefine({ manual: true }); await ready;
+        r.source.emit('GENERATION_STARTED', 'continue');
+        assert.equal(await work, false, 'release the analysis queue even if the provider ignores abort');
+        assert.equal(message.mes, 'Current reply.');
+        assert.equal(JSON.stringify(message.extra.ttottoUnifiedScene), before);
+        assert.equal(await feature.runRefine({ manual: true }), false, 'do not analyze during continuation');
+        r.source.emit('GENERATION_ENDED', 'continue');
+        release(JSON.stringify({ ...(kind === 'sfw' ? sfw : { ...nsfw, scene: sfw }), location: 'STALE_RESULT' }));
+        await Promise.resolve(); await Promise.resolve();
+        assert.doesNotMatch(JSON.stringify(message.extra), /STALE_RESULT/);
+        r.context.generateRaw = async () => { calls++; return JSON.stringify(kind === 'sfw' ? sfw : { ...nsfw, scene: sfw }); };
+        assert.equal(await feature.runRefine({ manual: true }), true, 'same-body completion remains eligible for a fresh analysis');
+        assert.equal(calls, 2);
+        assert.ok(r.runtime.diagnostics()[kind].events.some(e => e.stage === 'refine_interrupted'));
+    } finally { r.runtime.stop(); }
+});
+
+for (const kind of ['sfw', 'nsfw']) test(`${kind}: pending automatic repair waits through continuation and resumes after completion`, async () => {
+    const r = setup({ autoRefine: true }); await r.runtime.start({ withUi: false });
+    try {
+        if (kind === 'sfw') r.runtime.settings().engines.nsfw.enabled = false;
+        else r.runtime.settings().engines.nsfw.armMode = 'manual';
+        let calls = 0, saved;
+        const requested = new Promise(resolve => { saved = resolve; });
+        r.context.generateRaw = async () => { calls++; saved(); return JSON.stringify(kind === 'sfw' ? sfw : { ...nsfw, scene: sfw }); };
+        const message = { mes: 'A completed reply without a report.' };
+        r.context.chat.push(message); r.source.emit('MESSAGE_RECEIVED', 0);
+        r.source.emit('GENERATION_STARTED', 'continue');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        assert.equal(calls, 0, 'scheduled repair must not fire during continuation');
+        r.source.emit('GENERATION_ENDED', 'continue');
+        await Promise.race([requested, new Promise((_, reject) => {
+            const timer = setTimeout(() => reject(new Error('analysis did not resume')), 2500); timer.unref();
+        })]);
+        await new Promise(resolve => setTimeout(resolve, 0));
+        assert.equal(calls, 1);
+        assert.equal(r.runtime.features[kind].snapshotMatchesMessage(message), true);
+        assert.equal(message.mes, 'A completed reply without a report.');
+    } finally { r.runtime.stop(); }
+});
+
+test('quiet and dry-run events do not invalidate a running record analysis', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        const message = { mes: 'Current.' + tags(0) };
+        r.context.chat.push(message); r.source.emit('MESSAGE_RECEIVED', 0);
+        let release, started;
+        const ready = new Promise(resolve => { started = resolve; });
+        r.context.generateRaw = async () => { started(); return new Promise(resolve => { release = resolve; }); };
+        const work = r.runtime.features.sfw.runRefine({ manual: true }); await ready;
+        const epoch = r.runtime.core.refinementEpoch();
+        r.source.emit('GENERATION_STARTED', 'quiet'); r.source.emit('GENERATION_ENDED', 'quiet');
+        r.source.emit('GENERATION_STARTED', 'normal', {}, true);
+        assert.equal(r.runtime.core.refinementEpoch(), epoch);
+        release(JSON.stringify(sfw));
+        assert.equal(await work, true);
+    } finally { r.runtime.stop(); }
+});
+
+test('repeated polling saves pending state once and still persists the next real change', async () => {
+    const r = setup(); await r.runtime.start({ withUi: false });
+    try {
+        const settings = r.runtime.settings().engines.nsfw;
+        settings.armMode = 'stealth'; settings.slowBurnEnabled = true; settings.slowBurnIntensity = 'gentle';
+        const meta = r.runtime.features.nsfw.getChatMeta();
+        Object.assign(meta, { autoArmed: true, slowBurnSessionActive: true,
+            slowBurnTurnSession: { version: 1, baseline: '' }, slowBurnRecoveryPending: false, bridgePending: false });
+        const message = { mes: 'A sits quietly.' + tags(2) };
+        r.context.chat.push({ is_user: true, mes: 'Wait here.' }, message); r.source.emit('MESSAGE_RECEIVED', 1);
+        meta.slowBurnRecoveryPending = false;
+        meta.bridgePending = true;
+        let saves = 0;
+        r.context.saveMetadataDebounced = () => { saves++; };
+        const body = message.mes;
+        r.runtime.poll();
+        assert.equal(meta.slowBurnRecoveryPending, true);
+        assert.equal(meta.bridgePending, false);
+        assert.equal(saves, 1);
+        for (let i = 0; i < 200; i++) r.runtime.poll();
+        assert.equal(saves, 1);
+        meta.bridgePending = true; r.runtime.poll();
+        assert.equal(saves, 2, 'a later actual state change still persists');
+        assert.equal(message.mes, body);
+    } finally { r.runtime.stop(); }
+});
+
 for (const kind of ['sfw', 'nsfw']) test(`${kind}: real runtime counts new reply slots through delete, regenerate, branch and legacy migration`, async () => {
     const r = setup(); await r.runtime.start({ withUi: false });
     try {
@@ -203,7 +300,7 @@ test('common diagnostics switch tracks metadata, exports safely, clears and rest
         for (const kind of ['sfw', 'nsfw']) assert.equal(r.runtime.settings().engines[kind].diagnosticsEnabled, true);
         message.extra.token_count = 3095;
         const report = r.runtime.diagnostics();
-        assert.equal(report.version, '0.2.15');
+        assert.equal(report.version, '0.2.16');
         assert.ok(report.conflicts.events.some(row => row.stage === 'field_write' && row.data.after.number === 3095));
         assert.doesNotMatch(JSON.stringify(report), /PRIVATE_BODY|PRIVATE_TRANSLATION/);
         r.runtime.clearDiagnostics(); assert.equal(r.runtime.diagnostics().conflicts.events.length, 0);
@@ -357,7 +454,7 @@ test('unified core traces one write into both diagnostics and distinguishes save
         assert.equal(typeof descriptor.set, 'function');
         for (const kind of ['sfw', 'nsfw']) {
             const diag = r.runtime.diagnostics()[kind];
-            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.15');
+            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.16');
             const writes = diag.events.filter(e => e.stage === 'body_write');
             assert.equal(writes.length, 1); assert.equal(writes[0].data.ownWrite, true);
             assert.equal(writes[0].data.sameSceneBody, true);

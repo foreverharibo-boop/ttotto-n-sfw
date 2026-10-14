@@ -127,6 +127,7 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         isMode: kind => core.isMode(kind), collect: index => core.collect(index),
         prepare: (...args) => core.prepare(...args), invalidatePrompt: () => uiChanged(),
         holdsRewrite: () => core.holdsRewrite(), canRefine: (...args) => core.canRefine(...args),
+        refinementEpoch: () => core.refinementEpoch(),
         classifying: () => core.classifying(), acceptHeat: (...args) => core.acceptHeat(...args),
         preview: kind => core.owner() === kind ? core.compose() : '',
         commonState: options => core.commonSummary(options).state,
@@ -249,6 +250,6 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         diagnosticsEnabled, setDiagnosticsEnabled,
         clearDiagnostics: () => { features.sfw.clearDiagnostics(); features.nsfw.clearDiagnostics(); conflicts.clear(); internal.clear(); },
         intercept, chatReady, owner: ownerNow, get active() { return active; },
-        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.2.15', owner: ownerNow(), core: core.diagnostics(), conflicts: conflicts.report(),
+        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.2.16', owner: ownerNow(), core: core.diagnostics(), conflicts: conflicts.report(),
             internal: internal.report(), sfw: JSON.parse(features.sfw.diagnosticReport()), nsfw: JSON.parse(features.nsfw.diagnosticReport()) }) };
 }

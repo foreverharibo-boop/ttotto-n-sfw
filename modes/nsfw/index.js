@@ -583,7 +583,7 @@ function diagnosticState() {
         refineRunning, pendingGenerations: generationEvents.length };
 }
 function diagnosticReport() {
-    return JSON.stringify({ extension: 'ttotto-unified', mode: 'nsfw', version: '0.2.15', recording: diagnosticsEnabled(),
+    return JSON.stringify({ extension: 'ttotto-unified', mode: 'nsfw', version: '0.2.16', recording: diagnosticsEnabled(),
         note: 'Memory-only; no API keys or dialogue contents. request_observed means the fetch boundary, not proof of model receipt. server_response_observed describes a bounded response copy at the fetch boundary, not guaranteed provider-original output if another wrapper precedes this one. Response/message links require matching bodies; unmatched or ambiguous results are unconfirmed. No raw bodies are exported.',
         bodyWriteNote: DIAGNOSTIC_NOTE, current: diagnosticState(), events: diagnosticRows }, null, 2);
 }
@@ -1257,9 +1257,11 @@ function maybeStealthRelease() {
         && meta.slowBurnSessionActive
         && !slowBurnProgress(settings).canConclude;
     if (prematureSlowBurnEnd) {
-        meta.slowBurnRecoveryPending = true;
-        meta.bridgePending = false;
-        saveChatMeta();
+        if (meta.slowBurnRecoveryPending !== true || meta.bridgePending !== false) {
+            meta.slowBurnRecoveryPending = true;
+            meta.bridgePending = false;
+            saveChatMeta();
+        }
         return false;
     }
     meta.autoArmed = false;
@@ -2553,6 +2555,7 @@ async function runRefine({ manual = false } = {}) {
     const targetSwipe = currentSwipeIndex(target);
     const targetText = recordBody(target.mes);
     const metadata = context.chatMetadata;
+    const refineEpoch = unifiedHost?.refinementEpoch();
     const recordUnchanged = captureRecordGuard(target);
     refineAbortController?.abort();
     refineAbortController = new AbortController();
@@ -2561,14 +2564,18 @@ async function runRefine({ manual = false } = {}) {
     try {
         unifiedHost?.diagnosticBind?.(refineAbortController.signal, __diagOperation);
         const response = await awaitRefineResponse(refineAbortController.signal);
+        if (unifiedHost && (unifiedHost.refinementEpoch() !== refineEpoch || !unifiedHost.canRefine('nsfw', manual))) {
+            diagnosticRecord('refine_discarded', { reason: 'main_generation_changed' });
+            { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 11, reason: 'main_generation_changed', accepted: false }); return false; }
+        }
         // 보정 호출 중 스와이프/채팅/본문이 바뀌면 이전 장면을 새 답변에 덮어쓰지 않는다.
         if (refineAbortController?.signal.aborted || !runtimeActive || !isSupervising()
             || getContext().chatMetadata !== metadata || !getContext().chat?.includes(target)
             || assistantMessages().at(-1) !== target
-            || currentSwipeIndex(target) !== targetSwipe || recordBody(target.mes) !== targetText) { diagnosticRecord('refine_discarded', { reason: 'target_changed_or_disabled' }); { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 11, reason: 'target_changed_or_disabled', accepted: false }); return false; } }
+            || currentSwipeIndex(target) !== targetSwipe || recordBody(target.mes) !== targetText) { diagnosticRecord('refine_discarded', { reason: 'target_changed_or_disabled' }); { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 12, reason: 'target_changed_or_disabled', accepted: false }); return false; } }
         if (!recordUnchanged()) {
             diagnosticRecord('refine_discarded', { reason: 'record_changed' });
-            { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 12, reason: 'record_changed', accepted: false }); return false; }
+            { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 13, reason: 'record_changed', accepted: false }); return false; }
         }
         const state = parseRefineResponse(response, __diagOperation);
         diagnosticRecord('refine_parsed', { characters: Object.keys(state.characters).length, heatPresent: state.heat !== null, heat: state.heat });
@@ -2586,22 +2593,21 @@ async function runRefine({ manual = false } = {}) {
         saveChatMeta(__diagOperation);
         diagnosticRecord('refine_saved', { message: getContext().chat.indexOf(target), swipe: targetSwipe, ...diagnosticCache(target), ...diagnosticState() });
         if (manual) toastr.success('보조 AI가 장면 상태를 다시 잡았어요.', '🔞또또NSFW');
-        { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 13, reason: 'saved', accepted: true }); return true; }
+        { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 14, reason: 'saved', accepted: true }); return true; }
     } catch (error) {
         unifiedHost?.diagnosticCaught?.(__diagOperation, error);
         diagnosticRecord('refine_failed', { reason: error?.name === 'AbortError' ? 'aborted' : 'request_or_parse_failed' });
-        if (error?.name === 'AbortError') { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 14, reason: 'aborted', accepted: false }); return false; }
+        if (error?.name === 'AbortError') { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 15, reason: 'aborted', accepted: false }); return false; }
         refineFailure = { metadata, message: String(error?.message ?? error).slice(0, 180) };
         console.error(`${LOG_PREFIX} 보정 분석 실패`, error);
         if (manual) toastr.error(`보정 분석 실패: ${error?.message ?? error}`, '🔞또또NSFW');
-        { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 15, reason: 'failed', accepted: false }); return false; }
+        { unifiedHost?.diagnosticPoint?.(__diagOperation, 'return', { branch: 16, reason: 'failed', accepted: false }); return false; }
     } finally {
         refineRunning = false;
         refineAbortController = null;
         const queued = queuedRefineTarget;
         queuedRefineTarget = null;
-        if (queued?.metadata === getContext().chatMetadata
-            && (queued.message !== target || queued.swipe !== targetSwipe || queued.text !== targetText)) scheduleAutoRefine();
+        if (queued?.metadata === getContext().chatMetadata) scheduleAutoRefine();
         if (runtimeActive) updateUi();
     }
     } catch (__diagError) {
@@ -4013,6 +4019,12 @@ function resetFeatureSession() {
     resetDiagnosticEvidence();
     populateProfiles();
 }
+function pauseRefineForGeneration() {
+    if (refineRunning || refineTimer) diagnosticRecord('refine_interrupted', { reason: 'main_generation_started' });
+    clearTimeout(refineTimer); refineTimer = null;
+    queuedRefineTarget = null; lastAutoRefineTarget = null;
+    refineAbortController?.abort();
+}
 function leaveMode() {
     clearTimeout(refineTimer); refineTimer = null; queuedRefineTarget = null;
     refineAbortController?.abort();
@@ -4040,7 +4052,7 @@ function summary() {
         armed: isFullyArmed(), supervising: isSupervising(), diagnostics: diagnosticState() };
 }
 return { diagnosticRuntimeState,
-    isSupervising, settleReport, resetFeatureSession, leaveMode, buildInjection, currentState: effectiveState,
+    isSupervising, settleReport, resetFeatureSession, pauseRefineForGeneration, leaveMode, buildInjection, currentState: effectiveState,
     syncGeneration: events => { generationEvents = [...events]; },
     startSlowBurn: () => { if (getSettings().slowBurnEnabled && isFullyArmed()) startSlowBurnSessionIfNeeded(); },
     exitPrompt: () => BRIDGE_LINES.join('\n'),

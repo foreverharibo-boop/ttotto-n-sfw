@@ -113,7 +113,7 @@ function slowBurnStageInfo() {''', 1)
     # Unified diagnostics are labelled as the installed extension, not the
     # upstream feature versions. Body writes are observed once by core.js.
     source = source.replace('extension: MODULE_NAME, version: EXTENSION_VERSION, recording:',
-        f"extension: 'ttotto-unified', mode: '{kind}', version: '0.2.15', recording:")
+        f"extension: 'ttotto-unified', mode: '{kind}', version: '0.2.16', recording:")
     source = source.replace('current: diagnosticState(), events: diagnosticRows',
         'bodyWriteNote: DIAGNOSTIC_NOTE, current: diagnosticState(), events: diagnosticRows')
     source = source.replace('function clearDiagnostics() {',
@@ -259,7 +259,41 @@ function unifiedSceneReportInstruction() {
     anchor = '    activeRefineTarget = target;' if kind == 'sfw' else '    const metadata = context.chatMetadata;'
     assert source.count(anchor) == 1
     source = source.replace(anchor, anchor + f'\n    const recordUnchanged = captureRecordGuard({target});', 1)
+    source = source.replace('    const recordUnchanged = captureRecordGuard(',
+        '    const refineEpoch = unifiedHost?.refinementEpoch();\n    const recordUnchanged = captureRecordGuard(', 1)
     start = source.index('async function runRefine(')
+    # The reply may still have exactly the same text when a continuation starts.
+    # Reject across any main-generation boundary, even if it has already ended.
+    response_pattern = r'(        const response = await awaitRefineResponse\([^;]+\);)'
+    response_guard = f"""
+        if (unifiedHost && (unifiedHost.refinementEpoch() !== refineEpoch || !unifiedHost.canRefine('{kind}', manual))) {{
+            diagnosticRecord('refine_discarded', {{ reason: 'main_generation_changed' }});
+            return false;
+        }}"""
+    tail, count = re.subn(response_pattern, lambda m: m[0] + response_guard, source[start:], count=1)
+    assert count == 1, (kind, 'refinement generation guard')
+    source = source[:start] + tail
+    if kind == 'nsfw':
+        old = '''    if (prematureSlowBurnEnd) {
+        meta.slowBurnRecoveryPending = true;
+        meta.bridgePending = false;
+        saveChatMeta();
+        return false;
+    }'''
+        new = '''    if (prematureSlowBurnEnd) {
+        if (meta.slowBurnRecoveryPending !== true || meta.bridgePending !== false) {
+            meta.slowBurnRecoveryPending = true;
+            meta.bridgePending = false;
+            saveChatMeta();
+        }
+        return false;
+    }'''
+        assert source.count(old) == 1, 'idempotent pending state'
+        source = source.replace(old, new, 1)
+        old = '''        if (queued?.metadata === getContext().chatMetadata
+            && (queued.message !== target || queued.swipe !== targetSwipe || queued.text !== targetText)) scheduleAutoRefine();'''
+        assert source.count(old) == 1, 'resume cancelled same-body analysis'
+        source = source.replace(old, '        if (queued?.metadata === getContext().chatMetadata) scheduleAutoRefine();', 1)
     anchor = "        diagnosticRecord('refine_parsed', { characters: Object.keys(state.characters ?? {}).length, missing: stateCompletenessIssues(state) });" if kind == 'sfw' else '        const state = parseRefineResponse(response);'
     assert source[start:].count(anchor) == 1
     source = source[:start] + source[start:].replace(anchor, '''        if (!recordUnchanged()) {
@@ -317,6 +351,12 @@ function resetFeatureSession() {
     resetDiagnosticEvidence();
     populateProfiles();
 }
+function pauseRefineForGeneration() {
+    if (refineRunning || refineTimer) diagnosticRecord('refine_interrupted', { reason: 'main_generation_started' });
+    clearTimeout(refineTimer); refineTimer = null;
+    queuedRefineTarget = null; lastAutoRefineTarget = null;
+    refineAbortController?.abort();
+}
 function leaveMode() {
     clearTimeout(refineTimer); refineTimer = null; queuedRefineTarget = null;
     refineAbortController?.abort();
@@ -351,7 +391,7 @@ function leaveMode() {
     },
     monitorPrompt: () => getSettings().armMode === 'stealth' ? '' : MONITOR_REPORT_LINES.join('\\n'),'''
     exports = '''
-    isSupervising, settleReport, resetFeatureSession, leaveMode, buildInjection, currentState: effectiveState,
+    isSupervising, settleReport, resetFeatureSession, pauseRefineForGeneration, leaveMode, buildInjection, currentState: effectiveState,
     syncGeneration: events => { generationEvents = [...events]; },
     startSlowBurn: () => { if (getSettings().slowBurnEnabled && isFullyArmed()) startSlowBurnSessionIfNeeded(); },
     exitPrompt: () => BRIDGE_LINES.join('\\n'),
