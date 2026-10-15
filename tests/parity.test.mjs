@@ -24,7 +24,7 @@ for (const kind of ['sfw', 'nsfw']) {
         // The intimate schema adds a sanitized full scene record; none of its
         // original fields or parsing behavior may otherwise change.
         const addedScene = '    if (unifiedHost && raw.scene) clean.scene = unifiedHost.sanitizeCommon(raw.scene);\n';
-        assert.equal(fields(adapted).replace(addedScene, ''), fields(original));
+        assert.equal(fields(adapted).replace(addedScene, '').replace(`    raw = expandCompactReport(raw, '${kind}');\n`, ''), fields(original));
     });
 }
 test('one public interceptor and wand entry; no extension-tab panel insertion', () => {

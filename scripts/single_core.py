@@ -113,7 +113,7 @@ function slowBurnStageInfo() {''', 1)
     # Unified diagnostics are labelled as the installed extension, not the
     # upstream feature versions. Body writes are observed once by core.js.
     source = source.replace('extension: MODULE_NAME, version: EXTENSION_VERSION, recording:',
-        f"extension: 'ttotto-unified', mode: '{kind}', version: '0.2.20', recording:")
+        f"extension: 'ttotto-unified', mode: '{kind}', version: '0.2.21', recording:")
     source = source.replace('current: diagnosticState(), events: diagnosticRows',
         'bodyWriteNote: DIAGNOSTIC_NOTE, current: diagnosticState(), events: diagnosticRows')
     source = source.replace('function clearDiagnostics() {',
@@ -379,7 +379,7 @@ function leaveMode() {
         const compatible = unifiedHost.isMode('nsfw') || direct?.heat >= AUTO_ARM_ON ? parseCompatibleSfwState(message.mes) : null;
         return compatible ? mergeCurrentReports(direct ?? (snapshotMatchesMessage(message) ? snapshotForMessage(message).state : null), compatible) : direct;
     },'''
-    specific = '''commonPrompt: buildHandoffReport, continuityPrompt: () => buildUnifiedContinuityLines().join('\\n'), sanitizeState,''' if kind == 'sfw' else '''
+    specific = '''reportPrompt: () => stateReportLines(getSettings()).join('\\n'), commonPrompt: buildHandoffReport, continuityPrompt: () => buildUnifiedContinuityLines().join('\\n'), sanitizeState,''' if kind == 'sfw' else '''
     recentActs, recentDialogueBeats,
     detect: (state, message) => {
         if (!isSupervising()) return;
@@ -389,6 +389,7 @@ function leaveMode() {
         maybeStealthRelease();
         maybeStealthArm();
     },
+    sanitizeState, heatRules: () => HEAT_SCALE_LINES,
     monitorPrompt: () => getSettings().armMode === 'stealth' ? '' : MONITOR_REPORT_LINES.join('\\n'),'''
     exports = '''
     isSupervising, settleReport, resetFeatureSession, pauseRefineForGeneration, leaveMode, buildInjection, currentState: effectiveState,

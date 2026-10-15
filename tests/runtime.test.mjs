@@ -342,7 +342,7 @@ test('common diagnostics switch tracks metadata, exports safely, clears and rest
         for (const kind of ['sfw', 'nsfw']) assert.equal(r.runtime.settings().engines[kind].diagnosticsEnabled, true);
         message.extra.token_count = 3095;
         const report = r.runtime.diagnostics();
-        assert.equal(report.version, '0.2.20');
+        assert.equal(report.version, '0.2.21');
         assert.ok(report.conflicts.events.some(row => row.stage === 'field_write' && row.data.after.number === 3095));
         assert.doesNotMatch(JSON.stringify(report), /PRIVATE_BODY|PRIVATE_TRANSLATION/);
         r.runtime.clearDiagnostics(); assert.equal(r.runtime.diagnostics().conflicts.events.length, 0);
@@ -496,7 +496,7 @@ test('unified core traces one write into both diagnostics and distinguishes save
         assert.equal(typeof descriptor.set, 'function');
         for (const kind of ['sfw', 'nsfw']) {
             const diag = r.runtime.diagnostics()[kind];
-            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.20');
+            assert.equal(diag.extension, 'ttotto-unified'); assert.equal(diag.mode, kind); assert.equal(diag.version, '0.2.21');
             const writes = diag.events.filter(e => e.stage === 'body_write');
             assert.equal(writes.length, 1); assert.equal(writes[0].data.ownWrite, true);
             assert.equal(writes[0].data.sameSceneBody, true);
@@ -625,7 +625,7 @@ test('single event subscription and prompt slot, complete bookkeeping while inti
         r.context.chat.push({ mes: 'A quiet exchange.' + tags() }); r.source.emit('MESSAGE_RECEIVED', 0);
         await r.runtime.intercept([], 1000, null, 'normal');
         assert.deepEqual(Object.keys(r.prompts), [PROMPT_KEY]);
-        assert.match(r.prompts[PROMPT_KEY], /<sfw_scene>/); assert.match(r.prompts[PROMPT_KEY], /<scene_state>/);
+        assert.doesNotMatch(r.prompts[PROMPT_KEY], /<sfw_scene>/); assert.match(r.prompts[PROMPT_KEY], /<scene_state>/);
         assert.match(r.prompts[PROMPT_KEY], /dialogue_flow/); assert.match(r.prompts[PROMPT_KEY], /important_objects/);
         assert.doesNotMatch(r.prompts[PROMPT_KEY], /If sexual activity is still ongoing, omit/);
         const before = r.prompts[PROMPT_KEY]; await r.runtime.intercept([], 1000, null, 'quiet'); assert.equal(r.prompts[PROMPT_KEY], before);
@@ -741,7 +741,7 @@ test('intimate scenes share continuity rules and current facts, respecting each 
         settings.dialogueFlow = false; settings.transitionGuard = false;
         await r.runtime.intercept([], 1000, null, 'normal');
         assert.equal(shared(), '');
-        assert.match(r.prompts[PROMPT_KEY], /<sfw_scene>/);
+        assert.doesNotMatch(r.prompts[PROMPT_KEY], /<sfw_scene>/);
     } finally { r.runtime.stop(); }
 });
 
@@ -784,10 +784,12 @@ test('intimate next-generation prompt contains all collected common data and nat
         Object.assign(settings, { transitionGuard: true, dialogueFlow: true, repeatGuard: true, dialogueBeatGuard: true, nextBeatHints: true });
         r.runtime.settings().engines.nsfw.nextBeatHints = true;
         await r.runtime.intercept([], 1000, null, 'normal');
-        for (const text of ['Location: Room', 'Time/context: Morning', 'Environment: Rain', 'Important object "key": Desk', 'appearance: Coat', 'position/posture: Chair', 'holding/carrying: Cup', 'physical condition: Tired', 'Current conversation topic: Trip', 'question awaiting a response: When?', 'Newly established facts: Tomorrow', 'Scene type: conversation', 'Narrative intensity: 4/10', 'Narrative stage: 2/6', '- Talk', '- Question', '): Plan']) assert.ok(shared().includes(text), text);
+        for (const text of ['Location: Room', 'Time/context: Morning', 'Environment: Rain', 'Important object "key": Desk', 'appearance: Coat', 'position/posture: Chair', 'holding/carrying: Cup', 'physical condition: Tired', 'Current conversation topic: Trip', 'question awaiting a response: When?', 'Newly established facts: Tomorrow', 'Scene type: conversation', 'Narrative intensity: 4/10', 'Narrative stage: 2/6']) assert.ok(shared().includes(text), text);
         assert.match(r.prompts[PROMPT_KEY], /physical contact: Hand/);
-        assert.match(r.prompts[PROMPT_KEY], /clothing: Coat/);
+        assert.match(r.prompts[PROMPT_KEY], /appearance: Coat/);
         assert.match(r.prompts[PROMPT_KEY], /Listen/);
+        for (const text of ['Talk', 'Question', 'Plan']) assert.ok(r.prompts[PROMPT_KEY].includes(text), text);
+        assert.doesNotMatch(shared(), /SHARED RECENT EVENTS|SHARED RECENT DIALOGUE|SHARED NEXT POSSIBILITIES/);
         assert.equal(message.extra.ttottoUnifiedScene.modes.sfw.swipes['0'].state.stage, 2);
         assert.equal(message.extra.ttottoUnifiedScene.modes.nsfw.swipes['0'].state.stage, 4);
         assert.equal(message.extra.ttottoUnifiedScene.modes.nsfw.swipes['0'].state.heat, 8);
@@ -938,9 +940,9 @@ for (const [heat, stage] of [[7, 1], [8, 1], [10, 2]]) test(`NSFW heat ${heat}/s
             const prompt = r.prompts[PROMPT_KEY];
             assert.match(prompt, /CURRENT STAGE UNCONFIRMED/);
             assert.match(prompt, /Reassess BOTH heat and stage/);
-            assert.match(prompt, /stage value 1 is a FORMAT PLACEHOLDER/);
+            assert.match(prompt, /Example numbers are placeholders/);
             assert.doesNotMatch(prompt, /CURRENT STAGE \d\/6|MAXIMUM CHARACTER-INITIATED STAGE|current cap \d/);
-            assert.match(prompt, /clothing: Coat/);
+            assert.match(prompt, /appearance: Coat/);
             const diag = r.runtime.diagnostics().nsfw.current;
             assert.equal(diag.currentHeat, heat); assert.equal(diag.currentStage, stage);
             assert.equal(diag.stageSource, 'conflict'); assert.equal(diag.displayedStage, null);
@@ -1246,7 +1248,7 @@ test('intimate-only report collects and injects objects and full character facts
         assert.equal(state.state.stage, 2); assert.equal(r.runtime.features.nsfw.summary().state.stage, 4);
         assert.equal(r.context.chat[0].extra.ttottoUnifiedScene.modes.sfw, undefined);
         await r.runtime.intercept([], 0, null, 'normal');
-        for (const text of ['Important object "key": Desk', 'holding/carrying: Cup', 'physical condition: Tired', '"scene" object']) assert.ok(r.prompts[PROMPT_KEY].includes(text), text);
+        for (const text of ['Important object "key": Desk', 'holding/carrying: Cup', 'physical condition: Tired', '"scene":']) assert.ok(r.prompts[PROMPT_KEY].includes(text), text);
         assert.doesNotMatch(r.prompts[PROMPT_KEY], /<sfw_scene>/);
         r.context.chat[0].mes = 'Edited record.'; r.source.emit('MESSAGE_EDITED', 0);
         assert.equal(r.runtime.core.commonSummary().state, null);

@@ -90,6 +90,22 @@ export function createSceneCore(host, features) {
         detect(state, message);
         host.changed();
     }
+    function syncCompactRepair(kind, raw, message) {
+        if (raw?._v !== 2 || !host.ready() || blocking() || currentMessage() !== message) return;
+        const other = kind === 'sfw' ? 'nsfw' : 'sfw';
+        if (!enabled(other) || !features[kind].snapshotMatchesMessage(message)) return;
+        const state = features[other].sanitizeState(raw);
+        if (!state) return;
+        // The calling repair has already passed body/swipe/chat/epoch guards.
+        messageStore(message, other).swipes[String(features[other].currentSwipeIndex(message))] = {
+            state, at: Date.now(), messageSignature: features[other].messageStateSignature(message), signatureVersion: 3,
+        };
+        // An old manual repair of this same message must not shadow the new common record.
+        const meta = features[other].getChatMeta(false);
+        if (meta?.manualState?.source === 'ai-refine') meta.manualState = null;
+        features.sfw.persistChat();
+        if (kind === 'sfw') detect(state, message);
+    }
     function collect(index, { force = false } = {}) {
         if (!host.ready() || collecting || blocking()) return false;
         const message = typeof index === 'object' ? index : host.raw().chat?.[Number(index)] ?? currentMessage();
@@ -206,20 +222,20 @@ export function createSceneCore(host, features) {
         const parts = [];
         if (current.phase === 'wind-down') {
             parts.push(features.nsfw.exitPrompt());
-            if (enabled('sfw')) parts.push(features.sfw.commonPrompt());
+            if (enabled('sfw')) parts.push(features.sfw.commonPrompt(), features.sfw.reportPrompt());
+            else if (enabled('nsfw')) parts.push(features.nsfw.monitorPrompt());
         } else if (current.mode === 'nsfw') {
             parts.push(features.nsfw.buildInjection());
             if (enabled('sfw')) parts.push(features.sfw.commonPrompt());
             else parts.push(features.sfw.continuityPrompt());
         } else {
             if (current.mode === 'sfw') parts.push(features.sfw.buildInjection());
-            if (enabled('nsfw')) parts.push(features.nsfw.monitorPrompt());
+            if (current.mode !== 'sfw' && enabled('nsfw')) parts.push(features.nsfw.monitorPrompt());
             // Preserve the standalone general-mode manual exit instruction.
             const meta = features.sfw.getChatMeta(false);
             if (current.mode === 'waiting' && features.sfw.getSettings().enabled && features.sfw.getSettings().exitBridge && meta?.bridgePending) parts.push(features.sfw.exitPrompt());
         }
-        let prompt = parts.filter(Boolean).join('\n\n');
-        if (prompt.includes('<scene_state>') && prompt.includes('<sfw_scene>')) prompt += '\n\n[Unified report coordination]\nBoth report types are requested: output exactly one scene_state block and exactly one sfw_scene block. A one-report instruction applies separately to each tag type. Report bookkeeping must not change the story. Sexual heat/stage and narrative intensity/stage are independent; never substitute one for the other.';
+        const prompt = parts.filter(Boolean).join('\n\n');
         return prompt;
     }
     function prepare(type = 'normal', consumeBridge = true) {
@@ -305,7 +321,7 @@ export function createSceneCore(host, features) {
         }
         host.changed();
     }
-    return { collect, prepare, refresh, event, reset, compose, commonSummary, isMode, messageStore, clearRecords, acceptHeat,
+    return { collect, prepare, refresh, event, reset, compose, commonSummary, syncCompactRepair, isMode, messageStore, clearRecords, acceptHeat,
         classifying: () => classifying, holdsRewrite: () => Boolean(rewriteMode && blocking()),
         owner: () => selection().mode,
         diagnostics: () => ({ mode: selection().mode, phase: selection().phase, pendingGenerations: events.length, rewriteMode }),
