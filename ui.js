@@ -1,3 +1,4 @@
+import { sceneCollectionFields } from './compact-report.js';
 const ownerLabels = { sfw: '일반 장면 추적 중', nsfw: '친밀 장면 추적 중', waiting: '채팅을 열면 장면을 추적해요', off: '사용 중지' };
 
 export function createUi(getRuntime) {
@@ -147,7 +148,8 @@ export function createUi(getRuntime) {
         const state = { location: '', sceneType: '', time: '', environment: '', importantObjects: {}, characters: {},
             intensity: null, stage: null, acts: [], dialogueBeats: [], dialogueFlow: { topic: '', lastQuestion: '', newFacts: [] }, next: [],
             ...(snapshot?.state ?? {}) };
-        const key = JSON.stringify([ready, snapshot?.valid, Boolean(snapshot?.state), state]);
+        const collection = sceneCollectionFields(runtime.features.nsfw.getSettings());
+        const key = JSON.stringify([ready, snapshot?.valid, Boolean(snapshot?.state), state, collection]);
         if (key === sharedStateKey) return;
         sharedStateKey = key;
         sharedStatePanel.replaceChildren();
@@ -163,6 +165,7 @@ export function createUi(getRuntime) {
         sharedStatePanel.append(metrics);
         const orderedFields = ['sceneType', 'time', 'environment', 'importantObjects', 'dialogueFlow'];
         for (const field of orderedFields) {
+            if (collection[field === 'importantObjects' ? 'objects' : field] === false) continue;
             if (!(field in state)) continue;
             const value = state[field];
             if (field === 'dialogueReported') continue; // Parser bookkeeping, not a collected field.

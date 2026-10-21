@@ -122,3 +122,44 @@ for (const kind of ['sfw','nsfw']) test(`${kind}: a companion edit during repair
         assert.doesNotMatch(JSON.stringify(m.extra),/오래된 보정/);
     }finally{r.runtime.stop();}
 });
+
+test('NSFW description controls leave SFW collection and progression/history intact',async()=>{
+    const r=setup({mode:'manual',autoRefine:true});await r.runtime.start({withUi:false});
+    try {
+        const settings=r.runtime.features.nsfw.getSettings();
+        settings.sceneCollection={enabled:false};settings.slowBurnEnabled=true;
+        let calls=0;r.context.generateRaw=async()=>{calls++;return JSON.stringify(record());};
+        const m=r.receive('nsfw',record());
+        const current=r.runtime.features.nsfw.currentState().state;
+        assert.equal(current.location,undefined);assert.deepEqual(current.characters,{});
+        assert.equal(current.heat,8);assert.equal(current.stage,4);assert.ok(current.acts.length);
+        assert.doesNotMatch(JSON.stringify(m.extra),/코트|피곤함|RP 6월/);
+        await r.runtime.intercept([],1000,null,'normal');
+        assert.doesNotMatch(r.prompt(),/코트|피곤함|RP 6월/);
+        await new Promise(resolve=>setTimeout(resolve,1000)); // unexpected auto repair throws in setup
+        assert.equal(r.runtime.features.nsfw.diagnosticRuntimeState().refineRunning,false);assert.equal(calls,0);
+        settings.armMode='stealth';
+        r.receive('sfw',record(0));
+        const general=r.runtime.core.commonSummary().state;
+        assert.equal(general.location.ko,'거실');assert.equal(general.characters.A.appearance.ko,'코트');
+    } finally {r.runtime.stop();}
+});
+test('old common and native records are filtered at injection, restored on re-enable, and masked on late repair',async()=>{
+    const r=setup({mode:'manual'});await r.runtime.start({withUi:false});
+    try{
+        const m=r.receive('nsfw',record()),saved=JSON.stringify(m.extra);
+        const settings=r.runtime.features.nsfw.getSettings();
+        settings.sceneCollection={fields:{appearance:false,time:false,location:false}};
+        await r.runtime.intercept([],1000,null,'normal');
+        assert.doesNotMatch(r.prompt(),/코트|RP 6월|거실/);
+        assert.equal(r.runtime.core.commonSummary().state.location,undefined);
+        assert.equal(JSON.stringify(m.extra),saved);
+        settings.sceneCollection={};
+        assert.equal(r.runtime.core.commonSummary().state.location.ko,'거실');
+        let finish;r.context.generateRaw=()=>new Promise(resolve=>finish=resolve);
+        const pending=r.runtime.features.nsfw.runRefine({manual:true});await tick();
+        settings.sceneCollection={enabled:false};finish(JSON.stringify(record()));
+        assert.equal(await pending,true);
+        assert.doesNotMatch(JSON.stringify(m.extra),/코트|RP 6월|거실/);
+    }finally{r.runtime.stop();}
+});

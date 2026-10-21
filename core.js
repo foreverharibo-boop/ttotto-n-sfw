@@ -1,3 +1,4 @@
+import { filterSceneCollection } from './compact-report.js';
 // The sole scene engine. Feature libraries supply schemas, policy and controls;
 // they cannot subscribe, collect independently, negotiate ownership or inject.
 import { createBodyDiagnostics } from './diagnostics.js';
@@ -92,6 +93,7 @@ export function createSceneCore(host, features) {
     }
     function syncCompactRepair(kind, raw, message) {
         if (raw?._v !== 2 || !host.ready() || blocking() || currentMessage() !== message) return;
+        if (kind === 'nsfw') raw = filterSceneCollection(raw, features.nsfw.getSettings());
         const other = kind === 'sfw' ? 'nsfw' : 'sfw';
         if (!enabled(other) || !features[kind].snapshotMatchesMessage(message)) return;
         const state = features[other].sanitizeState(raw);
@@ -121,6 +123,7 @@ export function createSceneCore(host, features) {
                 const feature = features[kind];
                 feature.diagnosticResponse(message, host.raw().chat.indexOf(message));
                 parsed[kind] = feature.parseReport(message);
+                if (kind === 'sfw' && isMode('nsfw')) parsed[kind] = filterSceneCollection(parsed[kind], features.nsfw.getSettings());
                 const state = parsed[kind];
                 if (state) messageStore(message, kind).swipes[String(target.swipe)] = {
                     state, at: Date.now(), messageSignature: feature.messageStateSignature(message), signatureVersion: 3,
@@ -214,7 +217,7 @@ export function createSceneCore(host, features) {
             if (present(person.position)) state.characters[name].position = structuredClone(person.position);
             if (!present(state.characters[name].appearance) && present(person.clothing)) state.characters[name].appearance = structuredClone(person.clothing);
         }
-        return { ...snapshot, state: Object.keys(state).length ? state : null };
+        return { ...snapshot, state: Object.keys(state).length ? filterSceneCollection(state, features.nsfw.getSettings()) : null };
     }
     function compose() {
         if (!host.ready()) return '';

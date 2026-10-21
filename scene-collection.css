@@ -1,0 +1,4 @@
+
+.tns-scene-collection[open] > label, .tns-scene-collection[open] > small { display: block; margin: 8px 0; }
+.tns-scene-collection-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin: 10px 0; }
+.tns-scene-collection-grid label { display: flex; align-items: center; gap: 5px; }

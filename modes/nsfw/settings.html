@@ -233,6 +233,24 @@
           <small>공통·전용을 전환해도 각각의 내용은 보관돼요. ‘사용 안 함’으로 내용을 지우지 않고 끌 수 있어요.</small>
         </details>
 
+        <details class="tns-custom-injection tns-scene-collection">
+          <summary>장면 정보 수집</summary>
+          <label><input id="tns-scene-collection-enabled" type="checkbox"> 장면 정보 수집 사용</label>
+          <small>끄면 아래 정보를 모두 수집하지 않아요. 온도·진행 단계·반복 방지 기록은 기존 설정대로 유지돼요.</small>
+          <div class="tns-scene-collection-grid">
+            <label><input id="tns-scene-collect-location" type="checkbox"> 장소</label>
+            <label><input id="tns-scene-collect-time" type="checkbox"> 시간</label>
+            <label><input id="tns-scene-collect-environment" type="checkbox"> 주변 환경</label>
+            <label><input id="tns-scene-collect-objects" type="checkbox"> 중요한 물건</label>
+            <label><input id="tns-scene-collect-appearance" type="checkbox"> 외형·복장</label>
+            <label><input id="tns-scene-collect-position" type="checkbox"> 자세·위치</label>
+            <label><input id="tns-scene-collect-holding" type="checkbox"> 들고 있는 물건</label>
+            <label><input id="tns-scene-collect-condition" type="checkbox"> 신체 상태</label>
+            <label><input id="tns-scene-collect-contact" type="checkbox"> 접촉 상태</label>
+          </div>
+          <small>NSFW 수집에 공통 적용돼요. 끈 항목의 이전 기록은 삭제하지 않고 표시·주입에서 제외해요. 다시 켜면 현재 답변에 유효한 저장 기록을 사용할 수 있어요.</small>
+        </details>
+
         <label class="tns-field" for="tns-arm-mode">
           <span>개입 방식</span>
           <select id="tns-arm-mode" class="text_pole">
