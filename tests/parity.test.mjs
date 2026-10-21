@@ -16,10 +16,10 @@ for (const kind of ['sfw', 'nsfw']) {
         for (const name of functions) assert.ok(adapted.includes(`function ${name}(`), name);
         const defaults = source => source.match(/const DEFAULT_SETTINGS = Object\.freeze\(\{[\s\S]*?\n\}\);/)[0];
         assert.equal(defaults(adapted), defaults(original));
-        assert.equal(read(`modes/${kind}/settings.html`), read(`vendor/${kind}/settings.html`));
+        assert.equal(kind === 'nsfw' ? read(`modes/${kind}/settings.html`).replace(read('custom-injection.html'), '') : read(`modes/${kind}/settings.html`), read(`vendor/${kind}/settings.html`));
         // Theme adaptation may replace accent colors, but no layout rule is lost.
         const withoutAccents = css => css.replace(/var\(--SmartThemeQuoteColor, currentColor\)|crimson|royalblue|#f4a261|\bred\b/g, 'THEME_ACCENT');
-        assert.equal(withoutAccents(read(`modes/${kind}/style.css`)), withoutAccents(read(`vendor/${kind}/style.css`)));
+        assert.equal(withoutAccents(kind === 'nsfw' ? read(`modes/${kind}/style.css`).replace(read('custom-injection.css'), '') : read(`modes/${kind}/style.css`)), withoutAccents(read(`vendor/${kind}/style.css`)));
         const fields = source => source.match(/function sanitizeState\(raw\) \{[\s\S]*?\n\}/)[0];
         // The intimate schema adds a sanitized full scene record; none of its
         // original fields or parsing behavior may otherwise change.

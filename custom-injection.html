@@ -1,0 +1,35 @@
+        <details class="tns-custom-injection">
+          <summary>추가 프롬프트 · 킨크</summary>
+          <p><small>NSFW 개입 중에 기존 주입문과 함께 전송해요. 입력 내용은 자동 저장되며, 비워두면 주입하지 않아요.</small></p>
+          <label class="tns-field" for="tns-custom-character">
+            <span>설정할 캐릭터</span>
+            <select id="tns-custom-character" class="text_pole" aria-describedby="tns-custom-note"></select>
+            <small id="tns-custom-note"></small>
+          </label>
+          <label class="tns-field" for="tns-custom-prompt-scope">
+            <span>추가 프롬프트 사용 범위</span>
+            <select id="tns-custom-prompt-scope" class="text_pole">
+              <option value="common">모든 캐릭터 공통</option>
+              <option value="character">현재 캐릭터 전용</option>
+              <option value="off">사용 안 함</option>
+            </select>
+          </label>
+          <label class="tns-field" for="tns-custom-prompt">
+            <span>추가 프롬프트</span>
+            <textarea id="tns-custom-prompt" class="text_pole" rows="5" placeholder="함께 적용할 프롬프트를 입력하세요."></textarea>
+          </label>
+          <label class="tns-field" for="tns-custom-kinks-scope">
+            <span>킨크 사용 범위</span>
+            <select id="tns-custom-kinks-scope" class="text_pole">
+              <option value="common">모든 캐릭터 공통</option>
+              <option value="character">현재 캐릭터 전용</option>
+              <option value="off">사용 안 함</option>
+            </select>
+          </label>
+          <label class="tns-field" for="tns-custom-kinks">
+            <span>킨크</span>
+            <textarea id="tns-custom-kinks" class="text_pole" rows="5" placeholder="참고할 캐릭터의 취향·선호를 입력하세요."></textarea>
+          </label>
+          <small>공통·전용을 전환해도 각각의 내용은 보관돼요. ‘사용 안 함’으로 내용을 지우지 않고 끌 수 있어요.</small>
+        </details>
+

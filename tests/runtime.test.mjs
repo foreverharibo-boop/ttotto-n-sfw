@@ -145,6 +145,30 @@ function setup({ chat = [], autoRefine = false } = {}) {
     return { runtime, context, source, prompts, toasts, writes };
 }
 
+test('NSFW custom fields enter one main prompt, stay out of SFW and respect disabled mode', async () => {
+    const r = setup();
+    r.context.characters = [{ name: 'Same', avatar: 'a.png' }, { name: 'Same', avatar: 'b.png' }];
+    await r.runtime.start({ withUi: false });
+    try {
+        const settings = r.runtime.features.nsfw.getSettings();
+        settings.customInjection = { common: { prompt: 'CUSTOM-PROMPT', kinks: 'CUSTOM-KINK' }, characters: {} };
+        settings.armMode = 'manual';
+        for (const type of ['normal', 'regenerate', 'swipe', 'continue']) {
+            await r.runtime.intercept([], 0, null, type);
+            assert.match(r.prompts[PROMPT_KEY], /CUSTOM-PROMPT/);
+            assert.match(r.prompts[PROMPT_KEY], /CUSTOM-KINK/);
+            assert.equal((r.prompts[PROMPT_KEY].match(/CUSTOM-PROMPT/g) ?? []).length, 1);
+        }
+        settings.armMode = 'stealth';
+        await r.runtime.intercept([], 0, null, 'normal');
+        assert.doesNotMatch(r.prompts[PROMPT_KEY], /CUSTOM-PROMPT|CUSTOM-KINK/);
+        assert.doesNotMatch(r.runtime.features.sfw.buildInjection(), /CUSTOM-PROMPT|CUSTOM-KINK/);
+        settings.armMode = 'manual'; settings.enabled = false;
+        await r.runtime.intercept([], 0, null, 'normal');
+        assert.doesNotMatch(r.prompts[PROMPT_KEY], /CUSTOM-PROMPT|CUSTOM-KINK/);
+    } finally { r.runtime.stop(); }
+});
+
 for (const kind of ['sfw', 'nsfw']) test(`${kind}: a continuation cancels in-flight repair even before the body changes`, async () => {
     const r = setup(); await r.runtime.start({ withUi: false });
     try {
