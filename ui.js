@@ -1,3 +1,4 @@
+import { autoSizeSceneFields } from './scene-field-size.js';
 import { sceneCollectionFields } from './compact-report.js';
 const ownerLabels = { sfw: '일반 장면 추적 중', nsfw: '친밀 장면 추적 중', waiting: '채팅을 열면 장면을 추적해요', off: '사용 중지' };
 
@@ -98,8 +99,8 @@ export function createUi(getRuntime) {
     }
     function stateInput(label, value, row = false) {
         const wrap = el('label', undefined, row ? 'tns-char-field' : 'tns-field');
-        const input = el('input', undefined, 'text_pole');
-        input.type = 'text'; input.readOnly = true; input.value = displayValue(value);
+        const input = el('textarea', undefined, 'text_pole ttotto-scene-textarea');
+        input.rows = 1; input.readOnly = true; input.value = displayValue(value);
         input.placeholder = '기록 없음';
         wrap.append(el('span', label), input);
         return wrap;
@@ -243,6 +244,7 @@ export function createUi(getRuntime) {
         }
         refreshSceneVisibility(runtime);
         refreshSharedState(runtime);
+        autoSizeSceneFields();
     }
     function open(kind) {
         const owner = getRuntime().owner();

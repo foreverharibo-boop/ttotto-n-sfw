@@ -163,3 +163,26 @@ test('old common and native records are filtered at injection, restored on re-en
         assert.doesNotMatch(JSON.stringify(m.extra),/코트|RP 6월|거실/);
     }finally{r.runtime.stop();}
 });
+
+test('SFW and NSFW masks stay independent across scene ownership and auxiliary repair',async()=>{
+ const r=setup({mode:'stealth',autoRefine:true});await r.runtime.start({withUi:false});
+ try{
+  const general=r.runtime.features.sfw.getSettings(), intimate=r.runtime.features.nsfw.getSettings();
+  general.sceneCollection={enabled:false};intimate.sceneCollection={fields:{time:false}};
+  let calls=0;r.context.generateRaw=async()=>{calls++;return JSON.stringify(record(0));};
+  const m=r.receive('sfw',record(0));
+  assert.equal(r.runtime.core.commonSummary().state.location,undefined);
+  assert.doesNotMatch(JSON.stringify(m.extra),/코트|거실|RP 6월/);
+  await r.runtime.intercept([],1000,null,'normal');assert.doesNotMatch(r.prompt(),/코트|거실|RP 6월/);
+  await new Promise(resolve=>setTimeout(resolve,1000));assert.equal(calls,0);
+  intimate.armMode='manual';await r.runtime.intercept([],1000,null,'normal');
+  r.receive('nsfw',record());
+  const state=r.runtime.core.commonSummary().state;
+  assert.equal(state.location.ko,'거실');assert.equal(state.characters.A.appearance.ko,'코트');assert.equal(state.time,undefined);
+  await r.runtime.intercept([],1000,null,'normal');assert.match(r.prompt(),/거실|코트/);assert.doesNotMatch(r.prompt(),/RP 6월/);
+  intimate.armMode='stealth';r.runtime.features.nsfw.getChatMeta().autoArmed=false;
+  r.receive('sfw',record(0));
+  assert.equal(await r.runtime.features.sfw.runRefine({manual:true}),true);
+  assert.equal(r.runtime.core.commonSummary().state.location,undefined);
+ }finally{r.runtime.stop();}
+});

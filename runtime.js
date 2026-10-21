@@ -132,6 +132,7 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         preview: kind => core.owner() === kind ? core.compose() : '',
         commonState: options => core.commonSummary(options).state,
         sanitizeCommon: raw => features.sfw.sanitizeState(raw),
+        collectionSettings: () => features[core.isMode('nsfw') ? 'nsfw' : 'sfw'].getSettings(),
         activeActs: () => features.nsfw.recentActs(features.nsfw.getSettings().repeatWindow),
         activeDialogue: () => features.nsfw.recentDialogueBeats(),
         commonRecord: message => features.sfw.snapshotMatchesMessage(message)
@@ -260,6 +261,6 @@ export function createRuntime(getContext, { onUi = () => {}, open = () => {}, no
         diagnosticsEnabled, setDiagnosticsEnabled,
         clearDiagnostics: () => { features.sfw.clearDiagnostics(); features.nsfw.clearDiagnostics(); conflicts.clear(); internal.clear(); },
         intercept, chatReady, owner: ownerNow, get active() { return active; },
-        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.2.21', owner: ownerNow(), core: core.diagnostics(), conflicts: conflicts.report(),
+        diagnostics: () => ({ extension: SETTINGS_KEY, version: '0.2.25', owner: ownerNow(), core: core.diagnostics(), conflicts: conflicts.report(),
             internal: internal.report(), sfw: JSON.parse(features.sfw.diagnosticReport()), nsfw: JSON.parse(features.nsfw.diagnosticReport()) }) };
 }

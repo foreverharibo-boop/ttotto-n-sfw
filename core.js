@@ -93,7 +93,7 @@ export function createSceneCore(host, features) {
     }
     function syncCompactRepair(kind, raw, message) {
         if (raw?._v !== 2 || !host.ready() || blocking() || currentMessage() !== message) return;
-        if (kind === 'nsfw') raw = filterSceneCollection(raw, features.nsfw.getSettings());
+        raw = filterSceneCollection(raw, features[kind].getSettings());
         const other = kind === 'sfw' ? 'nsfw' : 'sfw';
         if (!enabled(other) || !features[kind].snapshotMatchesMessage(message)) return;
         const state = features[other].sanitizeState(raw);
@@ -123,7 +123,8 @@ export function createSceneCore(host, features) {
                 const feature = features[kind];
                 feature.diagnosticResponse(message, host.raw().chat.indexOf(message));
                 parsed[kind] = feature.parseReport(message);
-                if (kind === 'sfw' && isMode('nsfw')) parsed[kind] = filterSceneCollection(parsed[kind], features.nsfw.getSettings());
+                const collectionOwner = isMode('nsfw') || !enabled('sfw') ? 'nsfw' : 'sfw';
+                parsed[kind] = filterSceneCollection(parsed[kind], features[collectionOwner].getSettings());
                 const state = parsed[kind];
                 if (state) messageStore(message, kind).swipes[String(target.swipe)] = {
                     state, at: Date.now(), messageSignature: feature.messageStateSignature(message), signatureVersion: 3,
@@ -200,7 +201,7 @@ export function createSceneCore(host, features) {
     }
     function commonSummary() {
         let snapshot = features.sfw.summary();
-        if (!isMode('nsfw')) return snapshot.valid ? snapshot : { ...snapshot, state: null };
+        if (!isMode('nsfw')) return snapshot.valid ? { ...snapshot, state: filterSceneCollection(snapshot.state, features.sfw.getSettings()) } : { ...snapshot, state: null };
         const intimateCurrent = features.nsfw.currentState();
         const currentScene = intimateCurrent.state?.scene;
         if (currentScene) snapshot = { valid: true, state: currentScene };
