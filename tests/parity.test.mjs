@@ -15,7 +15,7 @@ for (const kind of ['sfw', 'nsfw']) {
         const functions = [...original.matchAll(/^(?:export )?(?:async )?function (\w+)\(/gm)].map(match => match[1]);
         for (const name of functions) assert.ok(adapted.includes(`function ${name}(`), name);
         const defaults = source => source.match(/const DEFAULT_SETTINGS = Object\.freeze\(\{[\s\S]*?\n\}\);/)[0];
-        assert.equal(defaults(adapted), defaults(original));
+        assert.equal(defaults(adapted).replace('    cardLinkUseReply: true,\n    cardLinkUseNext: true,\n', ''), defaults(original));
         const restoreInputs = html => html.replace(/<textarea id="((?:tns|tsf)-state-[^"]+)" rows="1" class="text_pole ttotto-scene-textarea"([^>]*)><\/textarea>/g, '<input id="$1" type="text" class="text_pole"$2>');
         let html = read(`modes/${kind}/settings.html`), css = read(`modes/${kind}/style.css`).replace(read('scene-field-size.css'), '');
         if (kind === 'nsfw') {
@@ -25,6 +25,7 @@ for (const kind of ['sfw', 'nsfw']) {
             html = html.replace('\n' + read('scene-collection-sfw.html'), '');
             css = css.replace(read('scene-collection-sfw.css'), '');
         }
+        html = html.replace(read('card-link-usage.html').replaceAll('PREFIX', kind === 'sfw' ? 'tsf' : 'tns'), '').replace('고른 캐시트 카테고리를 현재 답변과 전개 후보에 각각 사용할 수 있어요. 해당 모드가 개입할 때만 적용하며, CardInject에서 꺼둔 카테고리도 사용할 수 있어요.', 'CardInject가 분석해둔 캐시트 카테고리 중 고른 것을 다음 전개 힌트의 참고 자료로 써요. 개입 중일 때만 주입되고, 다음 전개 힌트가 켜져 있어야 동작해요. 보조 AI 보정 호출에도 같이 전달돼요.');
         assert.equal(restoreInputs(html), read(`vendor/${kind}/settings.html`));
         const withoutAccents = css => css.replace(/var\(--SmartThemeQuoteColor, currentColor\)|crimson|royalblue|#f4a261|\bred\b/g, 'THEME_ACCENT');
         assert.equal(withoutAccents(css), withoutAccents(read(`vendor/${kind}/style.css`)));

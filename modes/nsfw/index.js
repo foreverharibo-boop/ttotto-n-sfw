@@ -492,6 +492,8 @@ const DEFAULT_SETTINGS = Object.freeze({
     dialogueWindow: 2, // 대사 의도를 "또 하지 마" 목록에 올릴 최근 AI 답변 수 (1~6)
     // CardInject 연동: 캐시트 카테고리를 다음 전개 힌트의 참고 자료로 사용 (무장 중에만 주입)
     cardLinkEnabled: false,
+    cardLinkUseReply: true,
+    cardLinkUseNext: true,
     cardLinkSelected: {}, // { [캐릭터 키]: [카테고리 key, ...] }
     // 'stealth' = 로컬 감지, SFW에선 주입 제로(기본) / 'auto' = 온도 태그 감시 / 'manual' = 채팅 토글로 직접
     armMode: 'stealth',
@@ -2079,11 +2081,23 @@ function cardLinkPreferenceText() {
     return lines.join('\n');
 }
 
-function buildCardPreferenceLines() {
+function cardLinkUsage(settings = getSettings(), targetActive = slowBurnTargetProgress().active) {
+    const active = Boolean(settings.cardLinkEnabled && isFullyArmed());
+    return {
+        reply: active && settings.cardLinkUseReply !== false,
+        next: active && settings.cardLinkUseNext !== false && Boolean(settings.nextBeatHints) && !targetActive,
+    };
+}
+
+function buildCardPreferenceLines(usage = cardLinkUsage()) {
+    if (!usage.reply && !usage.next) return [];
     const text = cardLinkPreferenceText();
     if (!text) return [];
     return [
-        'CHARACTER PREFERENCES (from the character sheet — inspiration for choosing what happens next, not a checklist. Never force them, and never contradict the current scene state, hard limits, or user-banned items):',
+        usage.reply ? 'CHARACTER SHEET CONTEXT (apply relevant character traits, voice and preferences to the CURRENT reply):'
+            : 'CHARACTER PREFERENCES (inspiration for choosing what happens next, not a checklist):',
+        'Use only what fits the current scene and user intent. Preferences are not required actions or established scene facts. Never override explicit user changes, hard limits, banned items, or the active target and pacing rules.',
+        ...(usage.next ? ['Also use this same reference for next-beat candidates when relevant; do not repeat it in another reference block.'] : []),
         text,
     ];
 }
@@ -2478,9 +2492,11 @@ function buildInjection() {
         }
     }
 
+    const cardUsage = cardLinkUsage(settings, targetActive);
+    const preferenceLines = buildCardPreferenceLines(cardUsage);
+    if (preferenceLines.length) sections.push('', ...preferenceLines);
+
     if (settings.nextBeatHints && !targetActive) {
-        const preferenceLines = buildCardPreferenceLines();
-        if (preferenceLines.length) sections.push('', ...preferenceLines);
         const beats = nextBeatCandidates();
         if (beats.length) {
             sections.push(
@@ -2500,8 +2516,8 @@ function buildInjection() {
     ].filter(Boolean);
     if (styleParts.length) sections.push('', ...styleParts);
 
-    const nextGuidance = settings.nextBeatHints && !targetActive && cardLinkPreferenceText()
-        ? '"next" rule: draw the candidates from the CHARACTER PREFERENCES above when they fit the current scene and stage. Keep them fresh — never repeat "acts" or anything already banned.'
+    const nextGuidance = cardUsage.next && cardLinkPreferenceText()
+        ? '"next" rule: draw the candidates from the character-sheet reference above when they fit the current scene and stage. Keep them fresh — never repeat "acts" or anything already banned.'
         : '';
     sections.push('', ...stateReportLines(settings.slowBurnEnabled, dialogueGuard, nextGuidance));
 
@@ -2579,7 +2595,7 @@ function buildRefineInput() {
 
 function refinePromptMessages() {
     const settings = getSettings();
-    const preferenceText = settings.cardLinkEnabled && settings.nextBeatHints ? cardLinkPreferenceText() : '';
+    const preferenceText = cardLinkUsage(settings).next ? cardLinkPreferenceText() : '';
     const options = unifiedHost.reportOptions();
     if (!isFullyArmed()) options.nsfw = { ...options.nsfw, slowBurnEnabled: false };
     return [
@@ -3140,6 +3156,8 @@ function renderCardLinkPanel(settings) {
     if (!box) return;
     box.hidden = !settings.cardLinkEnabled;
     element('tns-card-link').checked = Boolean(settings.cardLinkEnabled);
+    element('tns-card-link-reply').checked = settings.cardLinkUseReply !== false;
+    element('tns-card-link-next').checked = settings.cardLinkUseNext !== false;
     if (!settings.cardLinkEnabled) return;
 
     const list = element('tns-card-link-list');
@@ -3188,9 +3206,12 @@ function renderCardLinkPanel(settings) {
         label.append(text, input);
         list.append(label);
     }
-    note.textContent = duplicated
-        ? `⚠️ 고른 ${picked}개 중 ${duplicated}개가 CardInject에서도 켜져 있어서 프롬프트에 두 번 들어가요. CardInject에서 그 카테고리를 끄면 개입 중일 때만 주입돼요. (★ = 이름이 성향·취향 관련처럼 보이는 카테고리)`
-        : `고른 ${picked}개는 개입 중일 때만 주입돼요. (★ = 이름이 성향·취향 관련처럼 보이는 카테고리)`;
+    const usesReference = settings.cardLinkUseReply !== false || (settings.cardLinkUseNext !== false && settings.nextBeatHints);
+    note.textContent = !usesReference
+        ? `고른 ${picked}개는 보관 중이에요. 현재 켜진 사용 용도가 없어 또또에서는 주입하지 않아요.`
+        : duplicated
+        ? `⚠️ 고른 ${picked}개 중 ${duplicated}개가 CardInject에서도 켜져 있어서 또또가 주입할 때 중복될 수 있어요. CardInject에서 그 카테고리를 끄면 개입 중일 때만 주입돼요. (★ = 이름이 성향·취향 관련처럼 보이는 카테고리)`
+        : `고른 ${picked}개는 선택한 용도로 개입 중일 때만 주입돼요. (★ = 이름이 성향·취향 관련처럼 보이는 카테고리)`;
 }
 
 function renderStatePanel() {
@@ -3640,6 +3661,8 @@ function bindUi() {
     bindSetting('tns-next-hints', 'nextBeatHints', Boolean);
     bindSetting('tns-dialogue-guard', 'dialogueBeatGuard', Boolean);
     bindSetting('tns-card-link', 'cardLinkEnabled', Boolean);
+    bindSetting('tns-card-link-reply', 'cardLinkUseReply', Boolean);
+    bindSetting('tns-card-link-next', 'cardLinkUseNext', Boolean);
     element('tns-card-link-refresh').addEventListener('click', () => {
         updateUi();
         toastr.info('CardInject 카테고리 목록을 다시 읽었어요.', '🔞또또NSFW');

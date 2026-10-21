@@ -186,3 +186,24 @@ test('SFW and NSFW masks stay independent across scene ownership and auxiliary r
   assert.equal(r.runtime.core.commonSummary().state.location,undefined);
  }finally{r.runtime.stop();}
 });
+
+for(const kind of ['sfw','nsfw'])test(kind+': CardInject purposes gate main and auxiliary requests independently without duplicate content',async()=>{
+ const r=setup({nsfw:kind==='nsfw',mode:kind==='nsfw'?'manual':'auto'});await r.runtime.start({withUi:false});
+ try{
+  r.context.characters=[{name:'A',avatar:'a.png'}];r.context.name1='Reader';
+  r.context.extensionSettings.cardinject={perChar:{'a.png':{categories:[{key:'p',name:'Traits',enabled:false,content:'{{char}} CARD_REFERENCE_MARKER {{user}}'}]}}};
+  const settings=r.runtime.features[kind].getSettings();Object.assign(settings,{cardLinkEnabled:true,cardLinkSelected:{'a.png':['p']}});
+  const other=r.runtime.features[kind==='sfw'?'nsfw':'sfw'].getSettings();Object.assign(other,{cardLinkEnabled:true,cardLinkSelected:{'a.png':['p']}});
+  r.receive(kind,record(kind==='nsfw'?8:0));
+  let calls=0,request;r.context.generateRaw=async args=>{calls++;request=JSON.stringify(args);return JSON.stringify(record(kind==='nsfw'?8:0));};
+  for(const reply of [false,true])for(const next of [false,true])for(const hints of [false,true]){
+   Object.assign(settings,{cardLinkUseReply:reply,cardLinkUseNext:next,nextBeatHints:hints});const before=calls;
+   await r.runtime.intercept([],1000,null,'normal');assert.equal(calls,before);
+   assert.equal((r.prompt().match(/CARD_REFERENCE_MARKER/g)??[]).length,reply||next&&hints?1:0);
+   assert.equal(r.prompt().includes('CHARACTER SHEET CONTEXT'),reply);
+   assert.equal(await r.runtime.features[kind].runRefine({manual:true}),true);assert.equal(calls,before+1);
+   assert.equal(request.includes('CARD_REFERENCE_MARKER'),next&&hints);
+  }
+  settings.cardLinkEnabled=false;await r.runtime.intercept([],1000,null,'normal');assert.doesNotMatch(r.prompt(),/CARD_REFERENCE_MARKER/);
+ }finally{r.runtime.stop();}
+});
