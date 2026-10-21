@@ -12,6 +12,8 @@ function renderSceneCollectionUi() {
     const settings = getSettings(), config = settings.sceneCollection ?? {};
     const master = element('tns-scene-collection-enabled');
     if (!master) return;
+    const language = element('tns-scene-record-language');
+    if (language) language.value = config.language === 'en' ? 'en' : 'ko';
     master.checked = config.enabled !== false;
     for (const key of Object.keys(sceneCollectionFields())) {
         const input = element(`tns-scene-collect-${key}`);
@@ -21,6 +23,14 @@ function renderSceneCollectionUi() {
     }
 }
 function bindSceneCollectionUi() {
+    element('tns-scene-record-language')?.addEventListener('change', event => {
+        const value = event.target.value;
+        if (!['ko', 'en'].includes(value)) return;
+        (getSettings().sceneCollection ??= {}).language = value;
+        getContext().saveSettingsDebounced?.();
+        clearInjectedPrompt();
+        updateUi();
+    });
     for (const key of ['enabled', ...Object.keys(sceneCollectionFields())]) {
         const input = element(key === 'enabled' ? 'tns-scene-collection-enabled' : `tns-scene-collect-${key}`);
         input?.addEventListener('change', () => {
@@ -97,7 +107,7 @@ function customInjectionCharacters() {
             Object.defineProperty(registry.byAvatar, avatar, { value: uuid, writable: true, enumerable: true, configurable: true });
             changed = true;
         }
-        entries.push({ uuid, avatar, name: String(card.name || card.data?.name || '이름 없는 캐릭터') });
+        entries.push({ uuid, avatar, name: String(card.name || card.data?.name || 'Unnamed Character') });
     }
     if (changed) context.saveSettingsDebounced?.();
     return entries;
@@ -127,17 +137,17 @@ function buildCustomInjectionLines() {
     if (!entries.length) return [];
     const store = customInjectionStore(), lines = [];
     for (const field of CUSTOM_FIELDS) {
-        const title = field === 'prompt' ? '추가 프롬프트' : '킨크 참고';
+        const title = field === 'prompt' ? 'Additional Instructions' : 'Kink Preferences';
         const common = entries.filter(entry => customInjectionScope(customInjectionProfile(entry.uuid), field) === 'common');
         const text = customInjectionText(store.common, field).trim();
         if (common.length && text) {
-            lines.push('', `[${title} · 공통 · 대상: ${common.map(entry => `${entry.name} (${entry.avatar})`).join(', ')}]`, text);
+            lines.push('', `[${title}${entries.length > 1 ? ' — ' + common.map(entry => `${entry.name} (${entry.avatar})`).join(', ') : ''}]`, text);
         }
         for (const entry of entries) {
             const profile = customInjectionProfile(entry.uuid);
             const text = customInjectionText(profile, field).trim();
             if (customInjectionScope(profile, field) === 'character' && text) {
-                lines.push('', `[${title} · ${entry.name} (${entry.avatar})]`, text);
+                lines.push('', `[${title}${entries.length > 1 ? ` — ${entry.name} (${entry.avatar})` : ''}]`, text);
             }
         }
     }
@@ -2388,7 +2398,7 @@ function buildSlowBurnLines(settings) {
 
 const STATE_REPORT_LINES = [
     'STATE REPORT: End your response with exactly one state block in this format (single line, valid JSON). It is machine-read and hidden from the reader — include it every time:',
-    '<scene_state>{"_status":"updated","location":"short English phrase || 짧은 한국어 구","characters":{"이름":{"clothing":"current clothing state, English || 한국어","position":"current posture/position, English || 한국어","contact":"current physical contact, English || 한국어"}},"acts":["2-4 significant new beats in this response, each \'English || 한국어\'"],"heat":0,"next":["2-3 fresh beats the scene could move to next, each \'English || 한국어\'"]}</scene_state>',
+    '<scene_state>{"_status":"updated","location":"short English phrase || 짧은 한국어 구","characters":{"name":{"clothing":"current clothing state, English || 한국어","position":"current posture/position, English || 한국어","contact":"current physical contact, English || 한국어"}},"acts":["2-4 significant new beats in this response, each \'English || 한국어\'"],"heat":0,"next":["2-3 fresh beats the scene could move to next, each \'English || 한국어\'"]}</scene_state>',
     'Every string value must be a bilingual pair: concise English first, then " || ", then natural Korean. Use the same character names as in the chat.',
     '"acts" rules: list ONLY substantive beats — physical/romantic/emotional developments that matter for repetition control. Skip mundane logistics (snacks, drinks, blankets, remote controls, small housekeeping actions). 2-4 items maximum, only what is NEW in this response.',
     ...HEAT_SCALE_LINES,
@@ -2399,7 +2409,7 @@ const STATE_REPORT_LINES = [
 
 const SLOW_BURN_STATE_REPORT_LINES = [
     'STATE REPORT: End your response with exactly one state block in this format (single line, valid JSON). It is machine-read and hidden from the reader — include it every time:',
-    '<scene_state>{"_status":"updated","location":"short English phrase || 짧은 한국어 구","characters":{"이름":{"clothing":"current clothing state, English || 한국어","position":"current posture/position, English || 한국어","contact":"current physical contact, English || 한국어"}},"acts":["2-4 significant new beats in this response, each \'English || 한국어\'"],"heat":0,"stage":1,"next":["2-3 fresh beats the scene could move to next, each \'English || 한국어\'"]}</scene_state>',
+    '<scene_state>{"_status":"updated","location":"short English phrase || 짧은 한국어 구","characters":{"name":{"clothing":"current clothing state, English || 한국어","position":"current posture/position, English || 한국어","contact":"current physical contact, English || 한국어"}},"acts":["2-4 significant new beats in this response, each \'English || 한국어\'"],"heat":0,"stage":1,"next":["2-3 fresh beats the scene could move to next, each \'English || 한국어\'"]}</scene_state>',
     'Every string value must be a bilingual pair: concise English first, then " || ", then natural Korean. Use the same character names as in the chat.',
     '"acts" rules: list ONLY substantive beats — physical/romantic/emotional developments that matter for repetition control. Skip mundane logistics (snacks, drinks, blankets, remote controls, small housekeeping actions). 2-4 items maximum, only what is NEW in this response.',
     ...HEAT_SCALE_LINES,

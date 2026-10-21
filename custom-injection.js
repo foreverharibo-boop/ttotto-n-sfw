@@ -60,7 +60,7 @@ function customInjectionCharacters() {
             Object.defineProperty(registry.byAvatar, avatar, { value: uuid, writable: true, enumerable: true, configurable: true });
             changed = true;
         }
-        entries.push({ uuid, avatar, name: String(card.name || card.data?.name || '이름 없는 캐릭터') });
+        entries.push({ uuid, avatar, name: String(card.name || card.data?.name || 'Unnamed Character') });
     }
     if (changed) context.saveSettingsDebounced?.();
     return entries;
@@ -90,17 +90,17 @@ function buildCustomInjectionLines() {
     if (!entries.length) return [];
     const store = customInjectionStore(), lines = [];
     for (const field of CUSTOM_FIELDS) {
-        const title = field === 'prompt' ? '추가 프롬프트' : '킨크 참고';
+        const title = field === 'prompt' ? 'Additional Instructions' : 'Kink Preferences';
         const common = entries.filter(entry => customInjectionScope(customInjectionProfile(entry.uuid), field) === 'common');
         const text = customInjectionText(store.common, field).trim();
         if (common.length && text) {
-            lines.push('', `[${title} · 공통 · 대상: ${common.map(entry => `${entry.name} (${entry.avatar})`).join(', ')}]`, text);
+            lines.push('', `[${title}${entries.length > 1 ? ' — ' + common.map(entry => `${entry.name} (${entry.avatar})`).join(', ') : ''}]`, text);
         }
         for (const entry of entries) {
             const profile = customInjectionProfile(entry.uuid);
             const text = customInjectionText(profile, field).trim();
             if (customInjectionScope(profile, field) === 'character' && text) {
-                lines.push('', `[${title} · ${entry.name} (${entry.avatar})]`, text);
+                lines.push('', `[${title}${entries.length > 1 ? ` — ${entry.name} (${entry.avatar})` : ''}]`, text);
             }
         }
     }

@@ -207,3 +207,40 @@ for(const kind of ['sfw','nsfw'])test(kind+': CardInject purposes gate main and 
   settings.cardLinkEnabled=false;await r.runtime.intercept([],1000,null,'normal');assert.doesNotMatch(r.prompt(),/CARD_REFERENCE_MARKER/);
  }finally{r.runtime.stop();}
 });
+
+for(const kind of ['sfw','nsfw'])test(`${kind}: selected language controls main/repair, preserves Korean history and displays English records`,async()=>{
+ const r=setup({mode:kind==='nsfw'?'manual':'stealth'});await r.runtime.start({withUi:false});
+ try{
+  const settings=r.runtime.features[kind].getSettings(),other=r.runtime.features[kind==='sfw'?'nsfw':'sfw'].getSettings();
+  const m=r.receive(kind,record(kind==='nsfw'?8:0)),before=JSON.stringify(m.extra);
+  for(const language of ['en','ko','en']){
+   settings.sceneCollection={language};other.sceneCollection={language:language==='en'?'ko':'en'};
+   await r.runtime.intercept([],1000,null,'normal');assert.match(r.prompt(),language==='en'?/English only/:/Korean only/);assert.doesNotMatch(r.prompt(),language==='en'?/Korean only/:/English only/);
+   assert.equal(JSON.stringify(m.extra),before);assert.match(r.prompt(),/거실/);
+  }
+  let request;r.context.generateRaw=async args=>{request=args;const raw=record(kind==='nsfw'?8:0);raw.scene.location='English repair room';return JSON.stringify(raw);};
+  assert.equal(await r.runtime.features[kind].runRefine({manual:true}),true);
+  assert.match(JSON.stringify(request),/English only/);assert.doesNotMatch(JSON.stringify(request),/Korean only/);
+  assert.equal(r.runtime.core.commonSummary().state.location.ko,'English repair room');
+  await r.runtime.intercept([],1000,null,'normal');assert.match(r.prompt(),/English repair room/);
+  settings.sceneCollection.language='ko';await r.runtime.intercept([],1000,null,'normal');assert.match(r.prompt(),/English repair room/);
+ }finally{r.runtime.stop();}
+});
+test('switching SFW/NSFW ownership selects its language without replacing saved values',async()=>{
+ const r=setup({mode:'stealth'});await r.runtime.start({withUi:false});
+ try{
+  r.runtime.features.sfw.getSettings().sceneCollection={language:'ko'};
+  r.runtime.features.nsfw.getSettings().sceneCollection={language:'en'};
+  for(const [kind,heat] of [['sfw',0],['sfw',8],['nsfw',8],['nsfw',0]]){
+   r.receive(kind,record(heat));await r.runtime.intercept([],1000,null,'normal');
+   const owner=heat>=6?'nsfw':'sfw';assert.equal(r.runtime.owner(),owner);
+   assert.match(r.prompt(),owner==='nsfw'?/English only/:/Korean only/);assert.doesNotMatch(r.prompt(),owner==='nsfw'?/Korean only/:/English only/);
+  }
+ }finally{r.runtime.stop();}
+});
+for(const kind of ['sfw','nsfw'])test(kind+': built-in prompts have no Korean labels in either language',async()=>{
+ const r=setup({mode:kind==='nsfw'?'manual':'stealth'});await r.runtime.start({withUi:false});
+ try{for(const language of ['ko','en']){
+  r.runtime.features[kind].getSettings().sceneCollection={language};await r.runtime.intercept([],1000,null,'normal');assert.doesNotMatch(r.prompt(),/[가-힣]/);
+ }}finally{r.runtime.stop();}
+});

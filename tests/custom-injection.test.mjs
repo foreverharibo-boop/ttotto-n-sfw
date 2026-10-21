@@ -96,3 +96,12 @@ test('arbitrary multiline text is preserved and treated as text by the editor', 
     r.input('prompt', value); r.api.renderCustomInjectionUi();
     assert.equal(r.value('prompt'), value); assert.ok(r.text().endsWith(value));
 });
+
+test('single-card headings are English and omit common/target/card labels; input remains verbatim', () => {
+    const r = setup();
+    r.input('prompt', '한글 지시\n{{outlet::rules}}'); r.input('kinks', 'English preference');
+    assert.equal(r.text(), '\n[Additional Instructions]\n한글 지시\n{{outlet::rules}}\n\n[Kink Preferences]\nEnglish preference');
+    r.change('prompt-scope', 'character'); r.input('prompt', '전용 지시');
+    assert.match(r.text(), /\[Additional Instructions\]\n전용 지시/);
+    assert.doesNotMatch(r.text(), /공통|대상|추가 프롬프트|킨크 참고|a\.png|Same/);
+});
