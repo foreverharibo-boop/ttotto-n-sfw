@@ -31,7 +31,7 @@ export function createSceneSourceUi(root, getSettings, changed) {
         rendered = key; list.replaceChildren();
         rules.forEach((rule, index) => {
             const row = node('div', undefined, 'ttu-source-rule');
-            row.append(node('code', `${rule.start} … ${rule.end}`));
+            row.append(node('div', `${rule.start} … ${rule.end}`, 'ttu-source-delimiters'));
             const actions = node('div', undefined, 'ttu-source-actions');
             const label = node('label');
             const enabled = node('input'); enabled.type = 'checkbox'; enabled.checked = rule.enabled;

@@ -707,8 +707,14 @@ textarea.text_pole.ttotto-scene-textarea {
 :is(#ttotto-sfw-settings, #ttotto-nsfw-settings) .ttu-source-rule {
   min-width: 0; padding: 8px 0; border-bottom: 1px solid var(--SmartThemeBorderColor, currentColor);
 }
-:is(#ttotto-sfw-settings, #ttotto-nsfw-settings) .ttu-source-rule code {
-  display: block; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85em;
+:is(#ttotto-sfw-settings, #ttotto-nsfw-settings) .ttu-source-delimiters {
+  display: block; min-width: 0; max-width: 100%; box-sizing: border-box;
+  white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: .85em;
+  font-weight: normal; line-height: 1.4; padding: 4px 8px; border-radius: 6px;
+  color: var(--SmartThemeBodyColor, inherit);
+  background: transparent;
+  background: color-mix(in srgb, var(--SmartThemeQuoteColor, currentColor) 8%, transparent);
+  border: 1px solid var(--SmartThemeBorderColor, currentColor);
 }
 :is(#ttotto-sfw-settings, #ttotto-nsfw-settings) .ttu-source-actions {
   display: grid !important; grid-template-columns: max-content minmax(0, 1fr) max-content;
