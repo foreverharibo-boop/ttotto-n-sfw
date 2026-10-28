@@ -29,7 +29,6 @@ export function createSceneSourceUi(root, getSettings, changed) {
         const rules = normalizeSourceRules(getSettings()), key = JSON.stringify(rules);
         if (rendered === key) return;
         rendered = key; list.replaceChildren();
-        if (!rules.length) list.append(node('small', '등록한 구간이 없어요. 필요한 구간만 추가해 주세요.'));
         rules.forEach((rule, index) => {
             const row = node('div', undefined, 'ttu-source-rule');
             row.append(node('code', `${rule.start} … ${rule.end}`));

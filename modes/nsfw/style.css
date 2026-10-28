@@ -677,15 +677,12 @@ textarea.text_pole.ttotto-scene-textarea {
 }
 :is(#ttotto-sfw-settings, #ttotto-nsfw-settings) .ttu-source-rules {
   min-width: 0; max-width: 100%; box-sizing: border-box;
-  border: 1px solid var(--SmartThemeBorderColor, currentColor); border-radius: 8px;
-  padding: 10px; margin: 10px 0; overflow-wrap: anywhere;
-}
-:is(#ttotto-sfw-settings, #ttotto-nsfw-settings) .ttu-source-rules > summary {
-  cursor: pointer; min-height: 32px;
+  overflow-wrap: anywhere;
 }
 :is(#ttotto-sfw-settings, #ttotto-nsfw-settings) .ttu-source-rules small {
   display: block; font-size: .82em; opacity: .8; margin: 6px 0; line-height: 1.45;
 }
+:is(#ttotto-sfw-settings, #ttotto-nsfw-settings) [data-source-status]:empty { display: none; }
 :is(#ttotto-sfw-settings, #ttotto-nsfw-settings) .ttu-source-compose {
   display: grid !important; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) max-content;
   align-items: end; gap: 6px;

@@ -214,10 +214,10 @@ function diagnosticRuntimeState() {
             data += (ROOT / 'custom-injection.css').read_text() + (ROOT / 'scene-collection.css').read_text()
         if filename == 'settings.html':
             prefix = 'tsf' if kind == 'sfw' else 'tns'
-            marker = f'        <details class="{prefix}-custom-injection {prefix}-scene-collection">'
-            assert marker in data
+            marker = (ROOT / ('scene-collection-sfw.html' if kind == 'sfw' else 'scene-collection.html')).read_text()
+            assert data.count(marker) == 1
             source_ui = (ROOT / 'scene-source-settings.html').read_text().replace('PREFIX', prefix).replace('MODE', kind.upper())
-            data = data.replace(marker, source_ui + marker, 1)
+            data = data.replace(marker, marker + source_ui, 1)
             data = adapt_card_html(data, kind, (ROOT / 'card-link-usage.html').read_text())
             data = adapt_state_html(data)
         if filename == 'style.css':
