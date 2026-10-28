@@ -636,3 +636,46 @@ textarea.text_pole.ttotto-scene-textarea {
     white-space: pre-wrap !important; overflow-wrap: anywhere; word-break: break-word;
     line-height: 1.45; field-sizing: content;
 }
+:is(#ttotto-sfw-settings, #ttotto-nsfw-settings) .ttu-source-rules {
+  min-width: 0; max-width: 100%; box-sizing: border-box;
+  border: 1px solid var(--SmartThemeBorderColor, currentColor); border-radius: 8px;
+  padding: 10px; margin: 10px 0; overflow-wrap: anywhere;
+}
+:is(#ttotto-sfw-settings, #ttotto-nsfw-settings) .ttu-source-rules > summary {
+  cursor: pointer; min-height: 32px;
+}
+:is(#ttotto-sfw-settings, #ttotto-nsfw-settings) .ttu-source-rules small {
+  display: block; font-size: .82em; opacity: .8; margin: 6px 0; line-height: 1.45;
+}
+:is(#ttotto-sfw-settings, #ttotto-nsfw-settings) .ttu-source-compose {
+  display: grid !important; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) max-content;
+  align-items: end; gap: 6px;
+}
+:is(#ttotto-sfw-settings, #ttotto-nsfw-settings) .ttu-source-compose > label {
+  display: flex !important; flex-direction: column; min-width: 0; gap: 4px; font-size: .85em;
+}
+:is(#ttotto-sfw-settings, #ttotto-nsfw-settings) .ttu-source-rules .text_pole {
+  width: 100% !important; min-width: 0 !important; max-width: 100%; box-sizing: border-box; margin: 0;
+}
+:is(#ttotto-sfw-settings, #ttotto-nsfw-settings) .ttu-source-rules button {
+  width: auto !important; min-width: max-content !important; white-space: nowrap !important;
+  word-break: keep-all !important; writing-mode: horizontal-tb !important;
+  padding: 6px 8px; margin: 0; font-size: .82em; box-sizing: border-box;
+}
+:is(#ttotto-sfw-settings, #ttotto-nsfw-settings) .ttu-source-mode {
+  display: grid !important; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px;
+  align-items: center; margin: 10px 0; font-size: .85em;
+}
+:is(#ttotto-sfw-settings, #ttotto-nsfw-settings) .ttu-source-rule {
+  min-width: 0; padding: 8px 0; border-bottom: 1px solid var(--SmartThemeBorderColor, currentColor);
+}
+:is(#ttotto-sfw-settings, #ttotto-nsfw-settings) .ttu-source-rule code {
+  display: block; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85em;
+}
+:is(#ttotto-sfw-settings, #ttotto-nsfw-settings) .ttu-source-actions {
+  display: grid !important; grid-template-columns: max-content minmax(0, 1fr) max-content;
+  gap: 6px; align-items: center; margin-top: 6px;
+}
+:is(#ttotto-sfw-settings, #ttotto-nsfw-settings) .ttu-source-actions > label {
+  display: flex !important; flex-direction: row !important; align-items: center; gap: 4px; white-space: nowrap;
+}

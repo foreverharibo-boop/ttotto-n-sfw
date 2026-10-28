@@ -18,6 +18,8 @@ for (const kind of ['sfw', 'nsfw']) {
         assert.equal(defaults(adapted).replace('    cardLinkUseReply: true,\n    cardLinkUseNext: true,\n', ''), defaults(original));
         const restoreInputs = html => html.replace(/<textarea id="((?:tns|tsf)-state-[^"]+)" rows="1" class="text_pole ttotto-scene-textarea"([^>]*)><\/textarea>/g, '<input id="$1" type="text" class="text_pole"$2>');
         let html = read(`modes/${kind}/settings.html`), css = read(`modes/${kind}/style.css`).replace(read('scene-field-size.css'), '');
+        html = html.replace(read('scene-source-settings.html').replaceAll('PREFIX', kind === 'sfw' ? 'tsf' : 'tns').replaceAll('MODE', kind.toUpperCase()), '');
+        css = css.replace(read('scene-source.css'), '');
         if (kind === 'nsfw') {
             html = html.replace(read('custom-injection.html'), '').replace(read('scene-collection.html'), '');
             css = css.replace(read('custom-injection.css'), '').replace(read('scene-collection.css'), '');

@@ -233,6 +233,23 @@
           <small>공통·전용을 전환해도 각각의 내용은 보관돼요. ‘사용 안 함’으로 내용을 지우지 않고 끌 수 있어요.</small>
         </details>
 
+        <details class="ttu-source-rules" id="tns-source-rules">
+          <summary>인포블럭 수집 규칙 · NSFW 전용</summary>
+          <small>이 모드의 새 기록 요청에만 적용돼요. 다른 모드 설정과 채팅 원문, 기존 저장 기록은 바꾸지 않아요.</small>
+          <div data-source-list></div>
+          <label class="ttu-source-mode"><span>추가할 구간의 처리</span><select data-source-mode class="text_pole" aria-label="추가할 구간 처리 방식"><option value="exclude">전체 제외</option><option value="physical">장면 정보만 참고</option></select></label>
+          <div class="ttu-source-compose">
+            <label><span>시작 태그</span><input data-source-start class="text_pole" type="text" maxlength="160" placeholder="&lt;Inner_Info&gt;"></label>
+            <label><span>종료 태그</span><input data-source-end class="text_pole" type="text" maxlength="160" placeholder="&lt;/Inner_Info&gt;"></label>
+            <button data-source-add class="menu_button" type="button">구간 추가</button>
+          </div>
+          <small data-source-status role="status" aria-live="polite"></small>
+          <small>최대 20개. 대소문자를 포함해 입력한 문자열 그대로 찾아요. 닫는 태그가 없거나 등록 구간이 겹치면 해당 구간은 전체 제외해요.</small>
+          <small>전체 제외: 어떤 기록의 근거로도 사용하지 않아요.</small>
+          <small>장면 정보만 참고: 명시된 날짜·시간·계절·날씨·장소·복장·자세·소지품만, 켜둔 수집 항목에 활용해요. 속마음·TMI·계획·흥분/자제력 수치는 제외하고 전개·대화·새로운 사실·후보의 근거로 쓰지 않아요.</small>
+          <small>NSFW 스텔스 감지는 NSFW에 등록한 구간을 두 처리 방식 모두 감지 근거에서 제외해요. 모드가 바뀌어도 이미 수집한 공통 기록은 기존 방식대로 인계돼요.</small>
+          <small>보조 분석에는 인식된 항목명(Date/Time/Weather/Loc/Clothing/Posture 등, 한국어 대응 항목, 👗·👔 복장 목록)만 전달해요. 자유로운 문장이나 알 수 없는 항목은 제외돼요. 본문 AI는 같은 제한을 지시로 따르므로 오수집 가능성이 남아요.</small>
+        </details>
         <details class="tns-custom-injection tns-scene-collection">
           <summary>장면 정보 수집</summary>
           <div class="tns-scene-record-language">

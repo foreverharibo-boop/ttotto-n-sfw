@@ -1,3 +1,5 @@
+import { sourceRuleInstructions } from './scene-source-rules.js';
+
 // Select the language of newly requested record values; never translate saved/user text.
 export function sceneRecordLanguage(settings = {}) {
     return settings.sceneCollection?.language === 'en' ? 'English' : 'Korean';
@@ -88,7 +90,8 @@ export function compactReportLines(kind, options, { repair = false, heatRules = 
         repair ? JSON.stringify(record) : `<${tag}>${JSON.stringify(record)}</${tag}>`,
         `Write descriptive values concisely in ${sceneRecordLanguage(active)} only; keep JSON keys, enum values and character names unchanged. Do not add translations. This language rule applies ONLY to the record, not the story.`,
         'Record facts at the END of the reply using ONLY the fields in this schema. Omit disabled fields entirely; do not relocate their descriptions into other fields. For selected fields, include unchanged facts and every relevant character/object. Unknown values stay empty; never invent facts or write unchanged/no_change acknowledgements. Escape quotes and line breaks. Bookkeeping must not change the story.',
-        ...('time' in selected ? ['Use RP time only, never the real date/clock. Preserve explicit in-story date/time (including Info_panel); otherwise keep established time context without inventing a clock time.'] : []),
+        ...sourceRuleInstructions(active, kind),
+        ...('time' in selected ? ['Use RP time only, never the real date/clock. Preserve explicit in-story date/time (including Info_panel only when allowed by source rules); otherwise keep established time context without inventing a clock time.'] : []),
         'scene_type: general/daily/conversation/romance/conflict/action/investigation; keep it unless the dominant scene changes. intensity: narrative tension 0-10, not sexual heat.',
         ...(scene.stage !== undefined ? ['scene.stage: observed narrative progression 1 setup, 2 engagement, 3 first development, 4 deepening, 5 decisive turn, 6 resolution; not sexual stage or permission to finish.'] : []),
         ...(scene.acts ? ['acts: up to 4 substantive NEW beats from this reply, not routine logistics.'] : []),
